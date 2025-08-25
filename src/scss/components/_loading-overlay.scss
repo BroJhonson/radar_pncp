@@ -1,0 +1,15 @@
+// scss/components/_loading-overlay.scss
+
+#loadingOverlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba($color-white, 0.7);
+    z-index: z('loading-overlay');
+    // A classe 'd-none' do Bootstrap controla a visibilidade
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}

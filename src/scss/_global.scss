@@ -1,0 +1,40 @@
+// scss/_global.scss
+
+html, body {
+    // A remoção do !important é ideal. Corrija a causa do overflow
+    // em vez de forçar o 'clip'. Se for essencial, use 'hidden'.
+    overflow-x: clip;
+}
+
+body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    font-size: $font-size-base;
+    font-family: $font-family-main;
+    background-color: $body-bg;
+
+    // Fundo escuro específico para a página do Radar
+    &.page-busca-licitacoes {
+        background-color: $body-bg-dark;
+    }
+}
+
+.main-content {
+    flex-grow: 1;
+    position: relative;
+    //z-index: z('main-content');
+}
+
+// Estilo de botão primário padrão
+.btn-primary {
+    background: linear-gradient(90deg, #4d10ad, $primary);
+    border: none;
+    color: $color-white;
+    transition: background 0.9s ease;
+
+    &:hover {
+        background: linear-gradient(90deg, $color-accent-orange, $color-accent-orange);
+        color: $color-white;
+    }
+}

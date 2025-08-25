@@ -1,0 +1,25 @@
+# Ambiente Virtual do Python
+venv/
+__pycache__/
+
+# Banco de Dados
+# O banco de dados pode ficar muito grande e não deve ser versionado.
+# A ideia é que cada ambiente (local, produção) tenha seu próprio banco
+# que é populado pelo script de sincronização.
+database.db
+sync_api.log
+failed_processing_data.jsonl
+
+# Variáveis de Ambiente
+# NUNCA envie este arquivo para o GitHub! Ele contém senhas e chaves.
+.env
+
+# Dependências do Node.js
+# A pasta node_modules pode ter milhares de arquivos.
+# Eles são reinstalados usando 'npm install'.
+node_modules/
+
+# Arquivos de IDEs e do Sistema Operacional
+.vscode/
+.idea/
+*.DS_Store

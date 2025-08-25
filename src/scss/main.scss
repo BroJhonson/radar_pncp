@@ -1,0 +1,31 @@
+// scss/main.scss
+
+// Arquivo principal que importa todos os parciais do SASS.
+// A ordem de importação é crucial para a cascata de estilos (CSS Cascade).
+
+// 1. Configurações Fundamentais: Variáveis, funções e mixins.
+//    Não geram CSS diretamente, mas são usados pelos outros arquivos.
+@import 'variables';
+
+// 2. Utilitários e Helpers
+//    Classes de ajuda e estilos genéricos como a scrollbar.
+@import 'utilities';
+
+// 3. Estilos Globais (Base)
+//    Estilos para tags HTML base (body, html, p, a), resets, etc.
+@import 'global';
+
+// 4. Componentes Reutilizáveis
+//    Módulos de UI independentes como header, footer, botões, cards.
+@import 'components/header';
+@import 'components/footer';
+@import 'components/offcanvas';
+@import 'components/cookie-banner';
+@import 'components/top-button';
+@import 'components/loading-overlay';
+
+// 5. Estilos Específicos de Páginas
+//    Estilos que se aplicam apenas a uma página ou seção específica.
+@import 'pages/home';
+@import 'pages/radar';
+@import 'pages/content-pages';

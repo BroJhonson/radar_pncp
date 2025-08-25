@@ -1,0 +1,86 @@
+// scss/components/_header.scss
+
+header.border-bottom {
+    background-color: $color-white;
+    box-shadow: 0 1px 15px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+
+    .logo-container {
+        margin-left: 60px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .logo-subtitle {
+        font-size: 0.8rem;
+        font-weight: $font-weight-medium;
+        color: $color-brand-text;
+        margin-top: 5px;
+        font-style: italic;
+    }
+
+    .nav-pills {
+        display: flex;
+        gap: 0.6rem;
+
+        .nav-link {
+            font-family: $font-family-main;
+            font-weight: $font-weight-bold;
+            color: $color-brand-blue;
+            border-radius: $border-radius;
+            transition: all 0.3s ease;
+
+            &.active,
+            &:hover {
+                background-color: $primary;
+                color: $color-white;
+            }
+
+            // Sobrescreve o hover se não for 'active' para um efeito diferente
+            &:hover:not(.active) {
+                background-color: rgba($primary, 0.4);
+            }
+        }
+    }
+
+    .dropdown-menu {
+        // Z-index alto, mas controlado pelas variáveis
+        z-index: z('offcanvas') + 10;
+    }
+}
+
+// RESPONSIVIDADE DO CABEÇALHO
+// =========================================================
+
+// DESKTOP (lg e acima)
+@media (min-width: $breakpoint-lg) {
+    header.border-bottom {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: z('header-desktop');
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        background-color: rgba($color-white, 0.85);
+        overflow: visible;
+    }
+
+    .main-content {
+        padding-top: 70px;
+    }
+}
+
+// MOBILE (abaixo de lg)
+@media (max-width: #{$breakpoint-lg - 0.02px}) {
+  header.border-bottom {
+    position: relative; 
+    z-index: 1030; // Acima do conteúdo, mas abaixo do backdrop.
+  }
+
+  .d-lg-none .dropdown .dropdown-menu {
+    // Garante que o menu aberto fique acima do seu próprio header.
+    z-index: 1031; 
+  }
+}

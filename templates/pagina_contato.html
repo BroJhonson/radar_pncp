@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% set body_class = 'page-contato' %} <!-- Adicionando body_class se ainda não tiver -->
+
+{% block title %}{{ page_title }} - RADAR PNCP{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row">
+        <div class="col-md-8 mx-auto">
+            <h1 class="mb-4 text-center">{{ page_title }}</h1>
+            <p class="lead text-center mb-5">Gostaríamos muito de ouvir você! Preencha o formulário abaixo e 
+                dê sua opinião ou sugestões sobre a plataforma, ficaremos gratos por isso.</p>
+
+            <!-- Exibir mensagens flash (sucesso ou erro) -->
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                            {{ message }}
+                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            <!-- Fim das mensagens flash -->
+
+            <div class="card shadow-sm">
+                <div class="card-body p-4">
+                    <!-- FORMULÁRIO ATUALIZADO -->
+                    <form id="formContato" method="POST" action="{{ url_for('processar_contato') }}">
+                        <div class="mb-3">
+                            <label for="nomeContato" class="form-label">Nome Completo</label>
+                            <input type="text" class="form-control" id="nomeContato" name="nome_contato" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="emailContato" class="form-label">Seu Melhor E-mail</label>
+                            <input type="email" class="form-control" id="emailContato" name="email_usuario" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="assuntoContato" class="form-label">Assunto</label>
+                            <input type="text" class="form-control" id="assuntoContato" name="assunto_contato" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="mensagemContato" class="form-label">Sua Mensagem</label>
+                            <textarea class="form-control" id="mensagemContato" name="mensagem_contato" rows="5" required></textarea>
+                        </div>
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary btn-lg">Enviar Mensagem</button>
+                        </div>
+                    </form>
+                    <!-- FIM DO FORMULÁRIO ATUALIZADO -->
+                </div>
+            </div>
+            
+            <!-- Seu conteúdo comentado de "Outras Formas de Contato" pode ser descomentado se desejar -->
+            <!--
+            <div class="mt-5 text-center">
+                <h4>Outras Formas de Contato</h4>
+                <p><strong>E-mail:</strong> contato@radar-pncp.com.br (Exemplo)</p>
+                <p><strong>Telefone:</strong> (XX) XXXX-XXXX (Exemplo)</p>
+            </div>
+            -->
+        </div>
+    </div>
+</div>
+{% endblock %}

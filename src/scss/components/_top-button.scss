@@ -1,0 +1,32 @@
+// src/scss/components/_top-button.scss
+
+#btnVoltarAoTopo {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: z('back-to-top');
+    width: 50px;
+    height: 50px;
+    padding: 0;
+    display: flex; // Mantém flex
+    align-items: center;
+    justify-content: center;
+
+    // ESTADO INICIAL (ESCONDIDO)
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(100%); // Efeito extra: sobe do rodapé
+    transition: opacity 0.3s, visibility 0.3s, transform 0.3s;
+
+    // ESTADO VISÍVEL
+    &.show {
+        opacity: 1;
+        visibility: visible;
+        transform: translateY(0);
+    }
+
+    i.bi-arrow-up-short {
+        font-size: 1.5rem;
+        line-height: 1;
+    }
+}

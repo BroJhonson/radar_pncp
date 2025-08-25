@@ -1,0 +1,368 @@
+{% extends "base.html" %}
+{% set body_class = 'page-busca-licitacoes' %}
+
+{% block title %}Busca de Licitações - RADAR PNCP{% endblock %}
+
+{% block content %}
+<div class="row gx-lg-4"> <!-- gx-lg-4 para espaçamento entre colunas em telas grandes -->
+    
+    <!-- ============ BOTÕES FLUTUANTES (SOMENTE MOBILE) ========= -->
+    <div class="botoes-flutuantes-mobile d-lg-none">
+        <!-- Botão de Filtros Flutuante -->
+        <button class="btn btn-primary btn-flutuante" type="button" data-bs-toggle="offcanvas" data-bs-target="#offcanvasFiltros" aria-controls="offcanvasFiltros">
+            <i class="bi bi-filter"></i>
+        </button>
+        <!-- Botão de Favoritos Flutuante -->
+        <button class="btn btn-warning btn-flutuante mt-2" type="button" data-bs-toggle="offcanvas" data-bs-target="#offcanvasFavoritos" aria-controls="offcanvasFavoritos">
+            <i class="bi bi-star-fill"></i>
+        </button>
+    </div>
+
+    <!-- Coluna da Esquerda (agora o botão só aparece no desktop) -->
+    <div class="col-lg-2 col-md-3 d-none d-lg-block" id="coluna-sidebar-esquerda">
+        
+        <div class="sticky-top-wrapper">
+            <button class="btn btn-primary w-100" type="button" data-bs-toggle="offcanvas" data-bs-target="#offcanvasFiltros" aria-controls="offcanvasFiltros">
+                <i class="bi bi-filter"></i> Filtros
+            </button>
+        </div>
+
+        <div id="conteudo-rolavel-sidebar">
+            <!-- ESPAÇO PARA ANÚNCIOS -->
+            <div id="espaco-anuncios-lateral" class="mt-3 p-3 border rounded bg-light text-center d-none d-md-block"> <!--PARA VISUALIZAR EM MOBILE SO BASTA REMOVER "d-none d-md-block" -->
+                <p class="text-muted"><em>Publicidade</em></p>
+                <img src="{{ url_for('static', filename='images/seu_anuncio_aqui.png') }}" alt="Anúncio Provisório" class="img-fluid">
+                <!-- <img src="https://via.placeholder.com/200x350?text=Anuncio+Lateral" alt="Anúncio Lateral" class="img-fluid"> --- PARA ANUNCIAR POR LINK URL  -->
+            </div>
+
+            <!-- CAIXA DE LICITAÇÕES SALVAS/FAVORITAS -->
+            <div id="painel-licitacoes-salvas" class="mt-3 d-none d-lg-block"> <!-- Visível só no desktop -->
+                <div class="p-3 border rounded bg-light shadow-sm">
+                    <h6 class="mb-3"><i class="bi bi-star-fill text-warning"></i> Licitações Favoritas</h6>
+                    <ul class="list-group list-group-flush" id="lista-favoritos-sidebar">
+                        <!-- Itens favoritos serão inseridos aqui por JS -->
+                        <li class="list-group-item text-muted small">Nenhuma licitação favoritada ainda.</li>
+                    </ul>
+                    <!-- (Opcional) Link para uma página completa de favoritos -->
+                    <!-- <a href="/meus-favoritos" class="btn btn-sm btn-outline-secondary w-100 mt-2">Ver Todos</a> -->
+                </div>
+            </div>
+
+            <!-- PLACEHOLDER PARA FEEDBACK NO DESKTOP (VISÍVEL APENAS EM TELAS MAIORES) -->
+            <div id="feedback-placeholder-desktop" class="d-none d-lg-block mt-3">
+                <!-- O JS colocará o conteúdo do feedback aqui -->
+            </div> 
+        </div>
+
+    </div>
+    
+
+    <!-- COLUNA DA DIREITA: Tabela de Licitações -->
+    <div class="col-lg-10 col-md-9" id="coluna-tabela-principal">
+        <div class="p-3 border rounded bg-white shadow-sm">
+            <!-- Área de Filtros Ativos (como antes) -->
+            <div id="filtrosAtivosContainer" class="mb-2 p-2 border rounded bg-light-subtle small" style="display: none;">
+                <strong>Filtros Aplicados:</strong> <span id="filtrosAtivosTexto"></span>
+                <a href="#" id="linkLimparFiltrosRapido" class="ms-2 text-decoration-none">(Limpar todos)</a>
+            </div>
+
+            <!-- Título da Tabela e Controles (como antes) -->
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h4><i class="bi bi-list-ul"></i> Licitações Encontradas <span id="totalRegistrosInfo" class="badge bg-secondary ms-2">0</span></h4>
+                <div>
+                    <button class="btn btn-sm btn-outline-primary me-2" id="btnAtualizarTabela" title="Atualizar">
+                        <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- BOTÃO EXPORTAR CSV -->
+            <div class="text-end mb-2">
+                <button class="btn btn-sm btn-outline-success" id="btnExportarCsv" title="Exportar para CSV">
+                    <i class="bi bi-file-earmark-spreadsheet"></i> Exportar
+                </button>
+            </div>
+            
+            <div class="d-flex justify-content-between align-items-center mb-2 table-controls-header">
+                <div class="filter-control-group"> 
+                    <label for="ordenarPor" class="form-label form-label-sm mb-0 me-1">Ordem:</label>
+                    <select class="form-select form-select-sm" id="ordenarPor" style="width: auto; min-width: 160px;"> 
+                        <!-- Ajuste min-width conforme necessário, ou remova se controlado por CSS -->
+                        <option value="dataAtualizacao_DESC" selected>Mais Recentes</option>
+                        <option value="dataAtualizacao_ASC">Mais Antigas</option>
+                    </select>
+                </div>
+
+                <div id="exibicaoInfo" class="text-center mx-2">
+                    <!-- Ex: "Exibindo 1-10 de 100" -->
+                </div>
+
+                <div class="filter-control-group"> 
+                    <label for="itensPorPagina" class="form-label form-label-sm mb-0 me-1">Exibindo:</label>
+                    <select class="form-select form-select-sm" id="itensPorPagina" style="width: auto; min-width: 75px;">
+                        <!-- Ajuste min-width conforme necessário, ou remova se controlado por CSS -->
+                        <option value="10" selected>10</option>
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Tabela Responsiva -->
+            <div class="table-responsive">
+                <table class="table table-striped table-hover table-sm">
+                    <thead>
+                        <tr>
+                            <th>Município/UF</th>
+                            <th>Objeto da Compra</th>
+                            <th>Órgão</th>
+                            <th>Status</th>
+                            <th>Valor (R$)</th>
+                            <th>Modalidade</th>
+                            <th>Atualização</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="licitacoesTableBody">
+                        <tr><td colspan="8" class="text-center">Nenhuma licitação encontrada ou aguardando filtros...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Paginação -->
+            <nav aria-label="Navegação das licitações"><ul class="pagination justify-content-center" id="paginationControls"></ul></nav>
+        
+            <!-- PLACEHOLDER PARA FEEDBACK NO MOBILE (VISÍVEL APENAS EM TELAS MENORES) -->
+            <div id="feedback-placeholder-mobile" class="d-lg-none mt-4 text-center"> 
+                <!-- O JS colocará o conteúdo do feedback aqui -->
+            </div>
+            
+        </div>
+    </div>
+</div>
+
+<!-- Offcanvas para Favoritos Para Mobile-->
+<div class="offcanvas offcanvas-start" tabindex="-1" id="offcanvasFavoritos" aria-labelledby="offcanvasFavoritosLabel" style="width: 85vw; max-width: 340px;">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="offcanvasFavoritosLabel"><i class="bi bi-star-fill text-warning"></i> Licitações Favoritas</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body">
+        <p class="text-muted small">Suas licitações salvas aparecerão aqui. Clique em uma para ver os detalhes.</p>
+        <ul class="list-group list-group-flush" id="lista-favoritos-offcanvas">
+            <!-- O seu JavaScript `renderizarFavoritosSidebar()` já vai popular esta lista -->
+        </ul>
+    </div>
+</div>
+
+
+<!-- Offcanvas para Filtros (Este é o painel de filtros que desliza) -->
+<div class="offcanvas offcanvas-start" tabindex="-1" id="offcanvasFiltros" aria-labelledby="offcanvasFiltrosLabel" style="width: 85vw; max-width: 340px;">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title" id="offcanvasFiltrosLabel"><i class="bi bi-filter"></i> Filtros </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body" id="offcanvasFiltrosBody">
+        <!-- ===== TODO O CONTEÚDO DOS FILTROS ===== -->
+        
+        <!-- Filtro: Status (Situação da Contratação) - Colapsável -->
+        <div class="mb-3 filter-collapsible">
+            <div class="d-flex justify-content-between align-items-center">
+                <a class="form-label text-decoration-none flex-grow-1" data-bs-toggle="collapse" href="#collapseStatusOffcanvas" ...>
+                    Status <i class="bi bi-chevron-down"></i>
+                </a>
+                <span class="btn-limpar-grupo" data-limpar="status" title="Limpar filtro de Status">×</span>
+            </div>
+            <div class="collapse" id="collapseStatusOffcanvas">
+                <div id="statusContainer" class="mt-2">
+                <small class="text-muted">Carregando status...</small>
+                </div>
+                <small id="statusWarning" class="text-danger d-none">Palavra-chave é obrigatória para este status.</small>
+            </div>
+        </div>
+
+        <!-- Filtro: Modalidades - Colapsável -->
+        <div class="mb-3 filter-collapsible">
+            <div class="d-flex justify-content-between align-items-center">
+                <a class="form-label text-decoration-none flex-grow-1" data-bs-toggle="collapse" href="#collapseModalidadesOffcanvas" ...>
+                    Modalidades <i class="bi bi-chevron-down"></i>
+                </a>
+                <span class="btn-limpar-grupo" data-limpar="modalidades" title="Limpar filtro de Modalidades">×</span>
+            </div>
+            <div class="collapse" id="collapseModalidadesOffcanvas">
+                <div class="mt-2">
+                    <input type="text" id="modalidadeSearchInput" class="form-control form-control-sm mb-2" placeholder="Buscar modalidade...">
+                    <div id="modalidadesContainerDropdown"> 
+                        <small class="text-muted">Carregando modalities...</small>
+                    </div>
+                </div>
+                <!-- <small id="modalidadesWarning" class="text-danger d-none">Palavra-chave é obrigatória para esta modalidade.</small> -->
+            </div>
+        </div>
+
+        <!-- Filtro: Palavra-Chave de Inclusão com TAG -->
+        <div class="mb-3"> 
+            <div class="d-flex justify-content-between align-items-center">
+                <label for="palavraChaveInclusaoInput" class="form-label mb-0" 
+                title="Adicione uma ou mais palavras-chave ao mesmo tempo. Pressione virgula ou enter">Palavras-chave (buscar):</label>
+                <span class="btn-limpar-grupo" data-limpar="inclusao" title="Limpar palavras-chave de busca">×</span>
+            </div>
+            <div class="input-group input-group-sm mb-1">
+                <input type="text" class="form-control form-control-sm" id="palavraChaveInclusaoInput" placeholder="Separe por virgula ou Enter">
+            </div>
+            <div id="tagsPalavraInclusaoContainer" class="tags-container"></div>
+        </div>
+
+        <!-- Filtro: Palavra-Chave de Exclusão com TAG -->
+        <div class="mb-3">
+            <div class="d-flex justify-content-between align-items-center">
+                <label for="palavraChaveExclusaoInput" class="form-label mb-0" 
+                title="Insira Palavras-chave de exclusao para não mostrar licitações com esses termos">Palavras-chave (excluir):</label>
+                <span class="btn-limpar-grupo" data-limpar="exclusao" title="Limpar palavras-chave de exclusão">×</span>
+            </div>            
+            <div class="input-group input-group-sm mb-1">
+                <input type="text" class="form-control form-control-sm" id="palavraChaveExclusaoInput" placeholder="Separe por virgula ou Enter">
+            </div>
+            <div id="tagsPalavraExclusaoContainer" class="tags-container"></div>
+        </div>
+                                                                
+        <!-- Filtro: Estados (UFs) - Dropdown com pesquisa -->
+        <div class="mb-3 filter-dropdown">
+            <div class="dropdown w-100">
+                <button class="btn btn-outline-secondary dropdown-toggle btn-sm w-100 text-start" type="button"
+                        id="dropdownUfsButton" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">
+                    Estados (UF) <span id="ufSelectedCount" class="badge bg-primary rounded-pill ms-1" style="display: none;">0</span>
+                </button>
+                <div class="dropdown-menu p-2" aria-labelledby="dropdownUfsButton" style="min-width: 280px; max-height: 300px; overflow-y: auto;">
+                    <input type="text" id="ufSearchInput" class="form-control form-control-sm mb-2" placeholder="Buscar UF...">
+                    <div id="ufsContainerDropdown"> 
+                        <small class="text-muted">Carregando UFs...</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filtro: Municípios - Dropdown -->
+        <div class="mb-3 filter-dropdown">
+            <div class="dropdown w-100">
+                <button class="btn btn-outline-secondary dropdown-toggle btn-sm w-100 text-start" type="button"
+                        id="dropdownMunicipiosButton" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false" disabled> <!-- Começa desabilitado -->
+                    Municípios <span id="municipiosSelectedCount" class="badge bg-primary rounded-pill ms-1" style="display: none;">0</span>
+                </button>
+                <div class="dropdown-menu p-2" aria-labelledby="dropdownMunicipiosButton" style="min-width: 280px; max-height: 300px; overflow-y: auto;">
+                    <input type="text" id="municipioSearchInput" class="form-control form-control-sm mb-2" placeholder="Buscar município...">
+                    <div id="municipiosContainerDropdown"> 
+                        <small class="text-muted">Selecione uma UF primeiro</small>
+                    </div>
+                </div>
+            </div>
+            <small class="text-muted" id="municipiosHelp">Selecione uma ou mais UFs para listar os municípios.</small>
+        </div>
+
+        <!-- Filtros Avançados (Colapsáveis) -->
+        <div class="mb-3 filter-collapsible">            
+            <a class="form-label text-decoration-none d-flex justify-content-between align-items-center"
+                data-bs-toggle="collapse" href="#collapseAdvancedOffcanvas" role="button"
+                aria-expanded="false" aria-controls="collapseAdvancedOffcanvas">
+                <span class="d-flex align-items-center">
+                    Filtros Avançados
+                    <span class="btn-limpar-grupo btn-limpar-avancado ms-1" data-limpar="avancado" title="Limpar Filtros Avançados">×</span>
+                </span>
+                <i class="bi bi-chevron-down ms-auto"></i>
+            </a>
+            <div class="collapse" id="collapseAdvancedOffcanvas">
+                <div class="mt-2">
+                    <div class="mb-3">
+                        <label class="form-label">Data de Publicação:</label>
+                        <div class="input-group input-group-sm">
+                            <input type="date" class="form-control" id="dataPubInicio" name="dataPubInicio" title="Data de Início">
+                            <span class="input-group-text">a</span>
+                            <input type="date" class="form-control" id="dataPubFim" name="dataPubFim" title="Data de Fim">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Valor Estimado (R$):</label>
+                        <div class="input-group input-group-sm">
+                            <input type="number" class="form-control" id="valorMin" name="valorMin" placeholder="Mínimo" min="0" step="any">
+                            <span class="input-group-text">a</span>
+                            <input type="number" class="form-control" id="valorMax" name="valorMax" placeholder="Máximo" min="0" step="any">
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Data de Atualização:</label>
+                        <div class="input-group input-group-sm">
+                            <input type="date" class="form-control" id="dataAtualizacaoInicio" name="dataAtualizacaoInicio" title="Data de Atualização Início">
+                            <span class="input-group-text">a</span>
+                            <input type="date" class="form-control" id="dataAtualizacaoFim" name="dataAtualizacaoFim" title="Data de Atualização Fim">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>    
+        <!-- ===== FIM DO CONTEÚDO DOS FILTROS ===== -->
+    </div>
+    <div class="offcanvas-footer p-3 border-top bg-light">
+         <button class="btn btn-primary w-100" id="btnBuscarLicitacoes"><i class="bi bi-search"></i> Aplicar Filtros</button>
+         <button class="btn btn-outline-secondary w-100 mt-2" id="btnLimparFiltros"><i class="bi bi-eraser"></i> Limpar Filtros</button>
+    </div>
+</div>
+
+<!-- Painel Lateral de Detalhes (Bootstrap Offcanvas) -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="detailsPanel" aria-labelledby="detailsPanelLabel">
+    <div class="offcanvas-header">
+        <div class="me-auto"> <!-- Ocupa o espaço à esquerda -->
+            <h5 class="offcanvas-title mb-0" id="detailsPanelLabel">Detalhes da Licitação</h5>
+            <small id="detailsPanelSubtitle" class="text-muted d-block"></small> 
+        </div>
+        <!-- Espaço para o Ícone de Favorito -->
+        <div id="detailsPanelFavoriteIconContainer" class="ms-2">
+            <!-- O JS inserirá o ícone/botão aqui -->
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body">
+        <div id="detailsPanelContent">
+            <p class="text-center">Selecione uma licitação para ver os detalhes.</p>
+            </div>
+            <hr>
+            <h5>Itens da Contratação</h5>
+            <div id="detailsPanelItensTableContainer" class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                <table class="table table-sm table-bordered table-striped"> 
+                    <thead>
+                        <tr>
+                            <th>Item</th>
+                            <th>Descrição</th>
+                            <th class="text-end">Qtde.</th>
+                            <th class="text-end">Un. Medida</th>
+                            <th class="text-end">Vl. Unit.</th>
+                            <th class="text-end">Vl. Total</th> 
+                        </tr>
+                    </thead>
+                    <tbody id="detailsPanelItensTableBody">
+                        <!-- Itens da licitação serão inseridos aqui -->
+                    </tbody>
+                </table>
+            </div>
+            <nav><ul class="pagination pagination-sm justify-content-center mt-2" id="detailsPanelItensPagination"></ul></nav>
+            <hr>
+            <h5>Arquivos</h5>
+            <ul class="list-group list-group-flush" id="detailsPanelArquivosList"></ul>
+            <hr>
+            <div class="d-flex flex-column flex-md-row align-items-center justify-content-center gap-2">
+                <a href="#" class="btn btn-primary" id="detailsPanelBtnPncp" target="_blank"><i class="bi bi-box-arrow-up-right"></i> Acessar PNCP</a>
+                <button class="btn btn-outline-secondary" id="detailsPanelBtnSistemaOrigem" disabled><i class="bi bi-building"></i> Acessar Sistema de Origem (Pendente)</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="offcanvas"><i class="bi bi-x-circle"></i> Fechar</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- TEMPLATE DO CONTEÚDO DO PAINEL DE FEEDBACK (FICARÁ OCULTO E SERÁ CLONADO PELO JS) -->
+<template id="template-painel-feedback">
+    <div class="painel-feedback-conteudo">
+        <h6>Viu algo errado ou pensou em algo legal?</h6>
+        <p><small>Conta pra gente, sua opinião vale muito!</small></p>
+        <a href="{{ url_for('pagina_contato') }}" class="btn btn-info btn-sm">Deixe seu Feedback</a>
+    </div>
+</template>
+{% endblock %}

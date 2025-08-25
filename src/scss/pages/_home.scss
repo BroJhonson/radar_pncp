@@ -1,0 +1,343 @@
+// scss/pages/_home.scss
+
+body.page-home {
+    background-color: $color-white;
+    color: $color-white;
+
+    .site-wrapper {
+        max-width: 1500px;
+        margin: 1rem auto;
+        box-shadow: 0 10px 50px rgba(0, 0, 0, 0.473);
+        background-color: $body-bg-dark;
+        overflow: hidden;
+        border-radius: 20px;
+        padding: 2rem;
+    }
+
+    .main-content .container-fluid {
+        margin-top: 0;
+    }
+
+    main.main-content {
+        background-color: inherit;
+    }
+
+    section {
+        padding: 7rem 0;
+        color: $color-white;
+    }
+
+    h1 { color: $primary; }
+    h2 { font-size: 2.75rem; color: #131f1d; }
+    h3 { color: $color-white; }
+}
+
+
+// SEÇÃO HERO
+// =========================================================
+.page-home .hero {
+    background: linear-gradient(to bottom, #ffffff, #628294);
+    padding-bottom: 5rem;
+    display: flex;
+    justify-content: center;
+
+    .container {
+        max-width: 1200px;
+        width: 100%;
+    }
+
+    .hero-title {
+        color: $primary;
+        text-align: center;
+        .destaque-laranja {
+            color: $color-accent-orange;
+        }
+    }
+
+    .destaque-gratuito {
+        color: $color-accent-orange;
+    }
+
+    .botao-destaque {
+        padding: 1rem 2.5rem;
+        font-size: 1.4rem;
+        font-weight: $font-weight-bold;
+        border-radius: 0.6rem;
+    }
+}
+
+
+// SEÇÃO ACORDEÃO HORIZONTAL
+// =========================================================
+.accordion-horizontal-container {
+    display: flex;
+    gap: 10px;
+    min-height: 420px;
+}
+
+.accordion-card {
+    flex: 1;
+    border-radius: $border-radius-lg;
+    overflow: hidden;
+    transition: flex 0.9s cubic-bezier(0.65, 0, 0.35, 1);
+    position: relative;
+    cursor: pointer;
+    background-color: $body-bg-dark;
+
+    &::before, &::after {
+        content: '';
+        position: absolute;
+    }
+
+    // Efeito de luz gradiente
+    &::before {
+        top: 50%; left: 50%;
+        width: 400%; height: 400%;
+        background: conic-gradient(from 180deg at 50% 50%, #5d52e5 0%, #db5722 65%, #ebe7ea 70%, #61ff52 50%);
+        z-index: 1;
+        transform: translate(-50%, -50%) rotate(0deg);
+        opacity: 0;
+        transition: opacity 0.5s ease-in-out;
+    }
+
+    // "Recorte" para criar a borda
+    &::after {
+        inset: 5px;
+        background: $body-bg-dark;
+        border-radius: calc(#{$border-radius-lg} - 5px);
+        z-index: 2;
+    }
+
+    .card-content {
+        position: relative;
+        z-index: 3;
+        padding: 2rem;
+        height: 100%;
+        color: #fdfdfd;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+
+        i, h3 { transition: transform 0.5s ease, color 0.5s ease; }
+        i { font-size: 7rem; }
+        h3 { font-size: 2rem; font-weight: $font-weight-bold; margin-top: 1rem; }
+    }
+
+    .hidden-content {
+        opacity: 0;
+        max-height: 0;
+        overflow: hidden;
+        transition: opacity 0.4s ease 0.2s, max-height 0.4s ease 0.2s;
+    }
+
+    // ESTADO ATIVO
+    &.active {
+        flex: 3;
+
+        &::before {
+            opacity: 1;
+            animation: rotateBorder 5s linear infinite;
+        }
+
+        .card-content i,
+        .card-content h3 {
+            transform: translateY(-50px);
+            color: $color-accent-orange;
+        }
+
+        .hidden-content {
+            opacity: 1;
+            max-height: 220px;
+        }
+    }
+}
+
+@keyframes rotateBorder {
+    from { transform: translate(-50%, -50%) rotate(0deg); }
+    to   { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+// SEÇÃO "COMO FUNCIONA"
+// =========================================================
+.page-home .how-it-works {
+    background-color: #f1f1f1;
+    color: $body-bg-dark;
+    font-size: 1rem;
+    font-weight: $font-weight-bold;
+
+    .step-card {
+        padding: 20px;
+        border-radius: 8px;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+
+        &:hover {
+            transform: translateY(-10px);
+            .step-number {
+                transform: scale(1.15);
+                background-color: $color-accent-orange;
+            }
+            h3 { color: $color-accent-orange; }
+            p { color: $color-accent-green; }
+        }
+    }
+
+    .step-number {
+        width: 60px; height: 60px;
+        background-color: $color-accent-green;
+        color: $color-white;
+        border-radius: 50%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        font-size: 2rem;
+        font-weight: $font-weight-bold;
+        margin: 0 auto 1.5rem auto;
+        transition: background-color 0.3s ease, transform 0.3s ease;
+    }
+
+    h3, p { transition: color 0.3s ease; }
+    h3 { color: $color-accent-green; }
+    p { color: $body-bg-dark; }
+}
+
+
+// OUTRAS SEÇÕES (BLOG, CTA)
+// =========================================================
+.blog-destaques {
+    background-color: $color-white;
+    .card {
+        border: none;
+        box-shadow: 0 8px 12px rgba(0, 0, 0, 0.08);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+
+        &:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 25px 16px rgba(0, 0, 0, 0.15);
+            .card-title {
+                color: $color-accent-orange;
+            }
+        }
+
+        .card-title { color: $primary; transition: color 0.3s ease; }
+        .card-text { color: #495057; }
+    }
+}
+
+// Imagem
+.faixa-final-cta {
+    transform: translateY(40px); // move 40px para baixo
+    //margin-top: -12rem ;  // ajusta o espaço entre a imagem e o texto abaixo
+}
+
+.page-home .final-cta {
+    background-color: #242323;
+    color: $color-white;
+    padding: 5rem 0;
+    
+    h2 { color: #ff7c11; }
+    .paragrafo-cta { font-size: 1.1rem; color: $color-white; margin-top: 1.5rem; }
+    .paragrafo-blog { font-size: 0.8rem; color: #cccccc; margin-top: 2rem; font-style: italic; line-height: 1.6; }
+}
+
+/* ============================
+   Seção Nossa Missão
+============================ */
+.nossa-missao {
+    background-color: $light; // cor clara do _variables.scss
+    padding: 4rem 0;
+
+    h2 {
+        font-weight: 700;
+        font-size: 2.2rem;
+        color: $primary; // cor principal já definida
+    }
+
+    p.lead {
+        max-width: 800px;
+        margin: 0 auto;
+        font-size: 1.2rem;
+        line-height: 1.6;
+        color: $secondary; // <--- troquei aqui
+    }
+
+    img {
+        margin-top: 2rem;
+        border-radius: 1rem;
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+        transition: transform 0.3s ease;
+
+        &:hover {
+            transform: scale(1.02);
+        }
+    }
+
+    .btn {
+        margin-top: 2rem;
+        padding: 0.75rem 2rem;
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+}
+
+/* ============================
+   CTA Intermediário
+============================ */
+.features {
+    .text-center.mt-5 {
+        margin-top: 3rem !important;
+
+        .btn {
+            padding: 0.8rem 2.2rem;
+            font-size: 1.1rem;
+            font-weight: 600;
+            border-radius: 50px;
+        }
+    }
+}
+
+
+// RESPONSIVIDADE PÁGINA HOME
+// =========================================================
+@media (max-width: $breakpoint-md) {
+    body.page-home {
+        .site-wrapper { padding: 1rem; }
+        section { padding: 3rem 0; }
+        h2 { font-size: 1.8rem; }
+    }
+
+    .page-home .hero {
+        .hero-title { font-size: 2rem; }
+        .texto-subtitulo { font-size: 1rem; }
+        .botao-destaque { font-size: 1.1rem; padding: 0.8rem 1.8rem; }
+    }
+
+    // Acordeão vira vertical
+    .accordion-horizontal-container {
+        flex-direction: column;
+        min-height: auto;
+        gap: 1rem;
+    }
+    .accordion-card,
+    .accordion-card.active {
+        flex: 1;
+        min-height: 100px;
+        transition: min-height 0.5s ease;
+    }
+    .accordion-card.active {
+        min-height: 350px;
+        .card-content i,
+        .card-content h3 {
+            transform: translateY(0); // Remove deslocamento
+        }
+    }
+    .accordion-card .hidden-content {
+        transition-delay: 0s;
+    }
+    
+    // Imagem da faixa final -Predios
+    .faixa-final-cta {
+        transform: none; // Remove o deslocamento vertical em telas menores
+    }
+}

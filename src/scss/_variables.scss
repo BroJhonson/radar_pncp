@@ -1,0 +1,69 @@
+// scss/_variables.scss
+
+// 1. CORES
+// =========================================================
+// Cores principais
+$primary:       #0d6efd;
+$secondary:     #6c757d;
+$success:       #198754;
+$info:          #0dcaf0;
+$warning:       #ffc107;
+$danger:        #dc3545;
+$light:         #f8f9fa;
+$dark:          #212529;
+
+// Cores personalizadas do projeto
+$color-brand-blue:      #0e1e27;
+$color-brand-blue-light:#5a7c99;
+$color-brand-text:      #1f2b38;
+$color-accent-orange:   #f06f04;
+$color-accent-orange-alt: #f7931a;
+$color-accent-green:    #17bdaa;
+$color-link:            $primary;
+$color-white:           #ffffff;
+$color-gray-footer:     #43484d;
+
+// Cores de fundo
+$body-bg: $color-white;
+$body-bg-dark: $color-brand-blue;
+
+
+// 2. FONTES
+// =========================================================
+$font-family-main: 'Poppins', sans-serif;
+$font-size-base: 0.95rem;
+$font-weight-normal: 400;
+$font-weight-medium: 500;
+$font-weight-bold: 700;
+
+
+// 3. BREAKPOINTS (PONTOS DE QUEBRA)
+// =========================================================
+$breakpoint-md: 767.98px;
+$breakpoint-lg: 992px;
+
+
+// 4. Z-INDEX (ORDEM DE EMPILHAMENTO)
+// =========================================================
+// Usar com a função z($key)
+$z-indexes: (
+  'main-content': 1,
+  'header-desktop': 1030,
+  'back-to-top': 1000,
+  'cookie-banner': 1050,
+  'loading-overlay': 1051,
+  'offcanvas-backdrop': 1055,
+  'offcanvas': 1056
+);
+
+// Função para acessar o mapa de z-index
+@function z($key) {
+  @return map-get($z-indexes, $key);
+}
+
+// 5. BORDAS
+// =========================================================
+$border-radius: 0.5rem;
+$border-radius-sm: 0.25rem;
+$border-radius-lg: 1rem;
+$border-color: #dee2e6;

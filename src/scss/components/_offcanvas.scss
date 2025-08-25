@@ -1,0 +1,234 @@
+// scss/components/_offcanvas.scss
+
+.offcanvas-backdrop {
+  // z-index altíssimo para cobrir tudo, incluindo o header mobile
+  z-index: 1590 !important; 
+}
+
+.offcanvas {
+  // z-index mais alto de todos para ficar na frente do backdrop
+  z-index: 1600 !important;
+}
+
+
+// ESTILOS GERAIS PARA OFFCANVAS
+.offcanvas {
+    z-index: z('offcanvas');
+    // A visibilidade é controlada pela classe .show do Bootstrap
+}
+
+.offcanvas-backdrop {
+    z-index: z('offcanvas-backdrop');
+    // A visibilidade é controlada pela classe .show do Bootstrap
+}
+
+.offcanvas-title {
+    font-size: 1.2rem;
+}
+
+.offcanvas-body {
+    h5 {
+        font-size: 1.05rem;
+        color: $primary;
+        margin-top: 1.25rem;
+        margin-bottom: 0.75rem;
+        padding-bottom: 0.25rem;
+        border-bottom: 1px solid #e9ecef;
+    }
+    hr {
+        margin: 1.25rem 0;
+    }
+}
+
+
+// OFFCANVAS DE FILTROS (#offcanvasFiltros)
+// =========================================================
+#offcanvasFiltros {
+    .filter-dropdown .dropdown-menu {
+        min-width: 280px;
+
+        input[type="text"].form-control-sm {
+            margin-bottom: 0.5rem;
+        }
+    }
+
+    .filter-collapsible {
+        .form-label {
+            cursor: pointer;
+            font-weight: $font-weight-medium;
+            color: #333;
+            width: 100%; // Garante que o botão ocupe toda a largura
+            &:hover { 
+                color: $color-accent-orange; 
+            }
+            
+        }
+
+        // Estilo específico para o "X" do botão "Filtros Avançados"
+        .btn-limpar-avancado {
+            font-size: 1rem; // Menor que o 1.3rem do .btn-limpar-grupo padrão
+            padding: 0; // Remove o padding para alinhar mais próximo
+            margin-left: 0.5rem; // Espaço entre "Filtros Avançados" e o "X"
+            border-radius: 0; // Remove o border-radius circular
+            color: #ced4da; // Mantém a cor original
+            transition: color 0.2s ease; // Mantém a transição apenas para a cor
+
+            &:hover {
+                color: #6c757d; // Escurece no hover, como no .btn-limpar-grupo
+                background-color: transparent; // Garante que não tenha fundo
+            }
+        }
+
+        .bi-chevron-down {
+            font-size: 1rem;
+            transition: transform 0.2s ease-in-out;
+        }
+
+        &[aria-expanded="true"] .bi-chevron-down {
+            transform: rotate(180deg);
+        }
+    }
+
+    .checkbox-container {
+        overflow-y: auto;
+        border: 1px solid $border-color;
+        padding: 0.5rem;
+        border-radius: $border-radius-sm;
+        background-color: $color-white;
+
+        .form-check {
+            margin-bottom: 0.2rem;
+        }
+        .form-check-label {
+            font-size: 0.9em;
+            font-weight: $font-weight-normal;
+        }
+    }
+
+    .btn-limpar-grupo { // Botão para limpar filtros de grupo (X)
+        cursor: pointer;
+        color: #ced4da;
+        font-size: 1.3rem;
+        font-weight: 600;
+        line-height: 1;
+        padding: 0 8px;
+        border-radius: 50%;
+        transition: all 0.2s ease;
+        user-select: none;
+
+        &:hover {
+            color: #6c757d; // Escurece um pouco no hover
+            background-color: transparent; // Garante que não tenha fundo no hover
+        }
+    }
+
+    // Estilo para o "x" das tags de palavra-chave
+    .tag-item .remove-tag {
+        background: transparent; // Remove o fundo
+        border: none;            // Remove a borda
+        padding: 0 0 0 5px;      // Ajusta o espaçamento
+        // O resto dos estilos que você já tem (cor, cursor, etc.)
+    }
+
+}
+
+
+// OFFCANVAS DE DETALHES (#detailsPanel)
+// =========================================================
+#detailsPanel {
+    &.offcanvas-end {
+        width: 50vw;
+    }
+
+    #detailsPanelContent {
+        p {
+            margin-bottom: 0.3rem;
+            font-size: 0.9em;
+            line-height: 1.4;
+        }
+        strong {
+            font-size: 1em;
+            color: $dark;
+        }
+        .badge { font-size: 0.85em; }
+        .small { font-size: 0.8em; }
+        div[style*="white-space: pre-wrap"] {
+            font-size: 0.88em;
+            padding: 8px;
+            max-height: 120px;
+        }
+        .justificativa-container a.small {
+            font-size: 0.9em;
+        }
+    }
+
+    #detailsPanelItensTableContainer {
+        max-height: 300px;
+        overflow-y: auto;
+        margin: 0 10px;
+
+        table {
+            td, th {
+                padding: 0.25rem 0.4rem;
+                font-size: 0.85em;
+                vertical-align: middle;
+            }
+        }
+    }
+
+    #detailsPanelItensPagination .page-link-sm {
+        padding: 0.2rem 0.4rem;
+        font-size: 0.75rem;
+    }
+
+    // Botões no Footer
+    .d-flex .btn {
+        padding: 0.6rem 1.5rem;
+        font-size: 0.9rem;
+        font-weight: $font-weight-bold;
+        border-radius: 8px;
+        border-width: 2px;
+        transition: all 0.3s ease-in-out;
+        min-width: 220px;
+    }
+
+    #detailsPanelBtnPncp {
+        background-color: $primary;
+        border-color: $primary;
+        color: $color-white;
+
+        &:hover {
+            background-color: darken($primary, 10%);
+            border-color: darken($primary, 10%);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba($primary, 0.3);
+        }
+    }
+
+    #detailsPanelBtnSistemaOrigem {
+        background-color: transparent;
+        border-color: $secondary;
+        color: $secondary;
+
+        &:hover:not(:disabled) {
+            background-color: $color-brand-blue-light;
+            border-color: #545b62;
+            color: $color-white;
+        }
+        &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    }
+
+    // Botão Fechar padrão do Bootstrap
+    .btn-secondary {
+        background-color: $light;
+        border-color: $border-color;
+        color: #495057;
+        &:hover {
+            background-color: #e9ecef;
+            border-color: $secondary;
+        }
+    }
+}

@@ -1,0 +1,56 @@
+// scss/components/_cookie-banner.scss
+
+.cookie-banner {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background-color: rgba($color-brand-blue, 0.95);
+    color: $light;
+    padding: 1rem 1.5rem;
+    z-index: z('cookie-banner');
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
+    border-top: 1px solid rgba($color-white, 0.1);
+    box-shadow: 0 -4px 15px rgba(0, 0, 0, 0.2);
+    transform: translateY(100%);
+    transition: transform 0.5s ease-in-out;
+
+    &.show {
+        transform: translateY(0);
+    }
+
+    .cookie-content {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        max-width: 1200px;
+        margin: 0 auto;
+        gap: 1rem;
+    }
+
+    .cookie-text {
+        margin: 0;
+        font-size: 0.9rem;
+        flex-grow: 1;
+
+        a {
+            color: $color-accent-orange-alt;
+            text-decoration: underline;
+        }
+    }
+
+    .cookie-actions button {
+        white-space: nowrap;
+    }
+
+    @media (max-width: $breakpoint-md) {
+        .cookie-content {
+            flex-direction: column;
+            text-align: center;
+        }
+        .cookie-actions {
+            margin-top: 1rem;
+        }
+    }
+}

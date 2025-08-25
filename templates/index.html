@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% set body_class = 'page-home' %}
+
+{% block title %}Radar PNCP – Busque e Acompanhe Licitações Públicas Gratuitamente{% endblock %}
+
+{% block content %}
+<!-- 1. Seção Principal (Hero) -->
+<section class="hero" data-aos="fade-in">
+    <div class="site-wrapper">
+        <div class="container text-center" data-aos="fade-up">
+            <h1 class="hero-title display-4 fw-bold" data-aos="fade-up" data-aos-delay="100">
+                Você encontrou! A ferramenta <span class="destaque-laranja">gratuita</span> que vai <span class="destaque-laranja">facilitar</span> sua busca pelas melhores licitações públicas.
+            </h1>
+            <p class="lead mt-3 texto-subtitulo" data-aos="fade-up" data-aos-delay="300">
+                Busque com precisão, analise com agilidade! O Radar PNCP traz filtros avançados para refinar sua pesquisa, 
+                preview completo dos editais na mesma tela e sistema de favoritos para acompanhar as melhores oportunidades.<br>
+                Menos cliques, mais eficiência.
+            </p>
+            <a href="{{ url_for('buscador_licitacoes') }}" class="btn btn-primary btn-lg mt-4 botao-destaque" data-aos="fade-up" data-aos-delay="500">Acessar Agora</a>
+        </div>
+    </div>
+</section>
+
+<!-- NOVA SEÇÃO: Nossa Missão -->
+<section class="nossa-missao py-5 bg-light" data-aos="fade-up">
+    <div class="container text-center">
+        <h2 class="fw-bold mb-4">Nossa Missão</h2>
+        <p class="lead">
+            O objetivo principal é simplificar e agilizar a busca, filtragem e acompanhamento de licitações públicas,
+            oferecendo uma experiência de usuário superior à do portal oficial.
+        </p>
+        <div class="mt-4">
+            <img src="{{ url_for('static', filename='images/preview-radar.png') }}" 
+                 alt="Preview do Radar PNCP" 
+                 class="img-fluid shadow rounded" 
+                 style="max-width: 800px;">
+        </div>
+        <a href="{{ url_for('buscador_licitacoes') }}" class="btn btn-primary btn-lg">
+            Experimente Gratuitamente
+        </a>
+    </div>
+</section>
+
+<!-- 2. Seção de Benefícios -->
+<section class="features">
+    <div class="container">
+        <div class="text-center mb-5" data-aos="fade-up">
+            <h2 class="fw-bold">Tudo o que você precisa em um só lugar</h2>
+        </div>
+        
+        <div class="accordion-horizontal-container" data-aos="fade-up" data-aos-delay="200">
+            <div class="accordion-card">
+                <div class="card-content">                    
+                    <h3>Filtros Inteligentes</h3>
+                    <div class="hidden-content">
+                        <p>Encontre as licitações mais relevantes ao combinar palavras-chave e excluir termos irrelevantes. 
+                           Refine por valor, data, modalidade, status e muito mais.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="accordion-card active">
+                <div class="card-content">                    
+                    <h3>Informação Direta</h3>
+                    <div class="hidden-content">
+                        <p>Todos os dados relevantes organizados de forma intuitiva e clara, 
+                           tudo na mesma página, para análise rápida.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="accordion-card">
+                <div class="card-content">
+                    <h3>Agilidade e Atualização</h3>
+                    <div class="hidden-content">
+                        <p>Conectado diretamente ao Portal Nacional de Compras Públicas, o Radar busca 
+                           e organiza novas oportunidades constantemente.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CTA Intermediário -->
+        <div class="text-center mt-5">
+            <a href="{{ url_for('buscador_licitacoes') }}" class="btn btn-primary btn-lg">Começar a Buscar Agora</a>
+        </div>
+    </div>
+</section>
+
+<!-- 3. Seção "Por que gratuito?" -->
+<section class="how-it-works">
+    <div class="container text-center" data-aos="fade-up">
+        <h2 class="fw-bold" data-aos="fade-up">Por que é gratuito?</h2>
+        <div class="row g-5 mt-4 align-items-center">
+            <div class="col-md-4" data-aos="fade-up" data-aos-delay="100">
+                <div class="step-card">
+                    <div class="step-number">1</div>
+                    <h3>Informação Pública</h3>
+                    <p>Se já é gratuita, por que pagar para encontrá-la mais rápido?</p>
+                </div>
+            </div>
+            <div class="col-md-4" data-aos="fade-up" data-aos-delay="200">
+                 <div class="step-card">
+                    <div class="step-number">2</div>
+                    <h3>Democratizando o Acesso</h3>
+                    <p>Queremos que qualquer pessoa ou empresa tenha acesso simples e rápido às licitações públicas.</p>
+                </div>
+            </div>
+            <div class="col-md-4" data-aos="fade-up" data-aos-delay="300">
+                 <div class="step-card">
+                    <div class="step-number">3</div>
+                    <h3>Impacto Positivo</h3>
+                    <p>Nosso objetivo é ajudar o maior número possível de empresas a conquistar contratos públicos.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 4. Seção dos artigos -->
+<section class="blog-destaques py-5" data-aos="fade-up">
+    <div class="container">
+        <h2 class="text-center fw-bold mb-5">Últimos artigos do blog</h2>
+        <div class="row g-4">
+            <!-- Artigo 1 -->
+            <div class="col-md-4">
+                <div class="card blog-card h-100">
+                    <img src="{{ url_for('static', filename='images/artigo1.jpg') }}" class="card-img-top" alt="Imagem do artigo 1">
+                    <div class="card-body">
+                        <h3 class="card-title fs-5">Como Encontrar Licitações por Palavra-chave</h3>
+                        <p class="card-text">Use filtros estratégicos para encontrar licitações perfeitas para o seu negócio.</p>
+                        <a href="{{ url_for('pagina_post_blog', post_slug='como-encontrar-licitacoes-por-palavra-chave') }}" class="btn btn-outline-primary">Ler mais</a>
+                    </div>
+                </div>
+            </div>
+            <!-- Artigo 2 -->
+            <div class="col-md-4">
+                <div class="card blog-card h-100">
+                    <img src="{{ url_for('static', filename='images/artigo2.jpg') }}" class="card-img-top" alt="Imagem do artigo 2">
+                    <div class="card-body">
+                        <h3 class="card-title fs-5">Nova Lei de Licitações</h3>
+                        <p class="card-text">Entenda o impacto da nova legislação e como se adaptar para aproveitar as mudanças.</p>
+                        <a href="{{ url_for('pagina_post_blog', post_slug='nova-lei-de-licitacoes-o-que-voce-precisa-saber') }}" class="btn btn-outline-primary">Ler mais</a>
+                    </div>
+                </div>
+            </div>
+            <!-- Artigo 3 -->
+            <div class="col-md-4">
+                <div class="card blog-card h-100">
+                    <img src="{{ url_for('static', filename='images/artigo3.jpg') }}" class="card-img-top" alt="Imagem do artigo 3">
+                    <div class="card-body">
+                        <h3 class="card-title fs-5">Erros Comuns em Propostas</h3>
+                        <p class="card-text">Evite armadilhas que podem desclassificar sua empresa nas licitações públicas.</p>
+                        <a href="{{ url_for('pagina_post_blog', post_slug='erros-comuns-em-propostas-de-licitacao') }}" class="btn btn-outline-primary">Ler mais</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- 5. CTA Final -->
+<img src="{{ url_for('static', filename='images/predios.png') }}" alt="Imagem fina decorativa" class="img-fluid faixa-final-cta">
+<section class="final-cta text-center" data-aos="zoom-in">
+    <div class="container">
+        <h2 class="display-5 fw-bold">Pronto para fechar mais negócios com o setor público?</h2>
+        <p class="lead mt-3 paragrafo-cta">Não precisa de cartão de crédito, login ou cadastro. É só acessar e começar a usar!</p>
+        <a href="{{ url_for('buscador_licitacoes') }}" class="btn btn-primary btn-lg mt-4">Usar o Radar PNCP Gratuitamente</a>
+        <div class="mt-4">
+            <a href="{{ url_for('pagina_blog') }}" class="btn btn-outline-light btn-sm">Ver mais artigos</a>
+        </div>
+        <p class="lead mt-3 paragrafo-blog">
+            Aprenda como sua empresa pode participar de licitações públicas de forma segura e eficiente. <br> 
+            Acesse nosso blog e explore conteúdos práticos e gratuitos para simplificar o processo e aproveitar as melhores oportunidades. 
+        </p>
+    </div>
+</section>
+{% endblock %}

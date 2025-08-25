@@ -1,0 +1,52 @@
+// scss/_utilities.scss
+
+// ANIMAÇÕES DE SCROLL (AOS)
+// =========================================================
+[data-aos] {
+    opacity: 0;
+    transition-property: transform, opacity;
+
+    &[data-aos="fade-up"] { transform: translateY(50px); }
+    &[data-aos="fade-in"] { /* Apenas opacity 0 já está no seletor pai */ }
+    &[data-aos="zoom-in"] { transform: scale(0.9); }
+
+    &.aos-animate {
+        transform: none;
+        opacity: 1;
+    }
+}
+
+
+// SCROLLBAR SUTIL
+// =========================================================
+::-webkit-scrollbar {
+    width: 8px;
+    background: transparent;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 10px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+    transition: background-color 0.3s ease-in-out;
+}
+
+// Mostra o thumb apenas no hover do elemento com scroll
+#offcanvasFiltros .offcanvas-body:hover,
+#detailsPanelItensTableContainer:hover,
+#conteudo-rolavel-sidebar:hover,
+.main-content:hover {
+    &::-webkit-scrollbar-thumb {
+        background-color: rgba(0, 0, 0, 0.4);
+    }
+}
+
+// Classe de utilidade para rebaixar elementos abaixo do offcanvas
+.is-layered-behind {
+  z-index: z('offcanvas-backdrop') - 10 !important; // Ex: 1580. Força a ficar atrás do backdrop.
+}

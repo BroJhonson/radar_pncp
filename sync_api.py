@@ -1,13 +1,18 @@
 # python sync_api.py
+# Essa é a parte principal do backend que lida com a sincronização das licitações do PNCP com o banco de dados local. 
 
+import mysql.connector
+from mysql.connector import errors # (Para tratamento de erros de conexão e SQL)
 import requests # (Para fazer requisições HTTP)
-import sqlite3 # (Para interagir com o banco de dados SQLite)
 import json # (Para lidar com dados JSON da API, embora 'requests' já faça muito disso)
 import os # (Para caminhos de arquivo)
 import time
 from datetime import datetime, date, timedelta # (Para trabalhar com datas)
 import logging 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type # Importar de tenacity para usar Retentativas
+from dotenv import load_dotenv # Importe a biblioteca
+
+load_dotenv()
 
 # ======= Configuração do Logging =======
 logger = logging.getLogger(__name__)
@@ -17,7 +22,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO) # Logs INFO e acima irão para o console
 # Cria um handler para escrever logs em um arquivo
 # O arquivo será 'sync_api.log' na mesma pasta do script.
-log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sync_api.log')
+log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sync_api.log') # isso garante que o log será salvo no mesmo diretório do script
 file_handler = logging.FileHandler(log_file_path, mode='a') # 'a' para append
 file_handler.setLevel(logging.ERROR) # Logs Error e acima irão para o arquivo
 # Cria um formatador para definir o formato das mensagens de log
@@ -67,6 +72,7 @@ api_retry_decorator = retry(
 )
 # --- Fim da Configuração de Retentativas ---
 
+# =========================================================================================== #
 # ======== Configurações do Processamento das Licitações ========
 # Define o caminho para a pasta backend
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -74,12 +80,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')
 TAMANHO_PAGINA_SYNC  = 50 # OBRIGATORIO
 LIMITE_PAGINAS_TESTE_SYNC = None # OBRIGATORIO. Mudar para 'None' para buscar todas.
-CODIGOS_MODALIDADE = [1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO)
-DIAS_JANELA_SINCRONIZACAO = 365 #Periodo da busca
+CODIGOS_MODALIDADE = [5]#1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO)
+DIAS_JANELA_SINCRONIZACAO = 7 # 365 #Periodo da busca
 API_BASE_URL = "https://pncp.gov.br/api/consulta" # (URL base da API do PNCP)      
 API_BASE_URL_PNCP_API = "https://pncp.gov.br/pncp-api"   # Para itens e arquivos    ## PARA TODOS OS LINKS DE ARQUIVOS E ITENS USAR PAGINAÇÃO SE NECESSARIO ##
-ENDPOINT_PROPOSTAS_ABERTAS = "/v1/contratacoes/proposta" # (Endpoint específico)
-# ======= Fim das Configurações do Processamento das Licitações ========
+# ======= Fim das Configurações do Processamento das Licitações ============================== #
 
 # ===== Validação de Dados da Licitação para decidir se continua a buscar a licitação especifca ou não ===== 
 def validar_dados_licitacao_api(licitacao_api_data):
@@ -164,7 +169,7 @@ def fetch_itens_from_api(cnpj_orgao, ano_compra, sequencial_compra, pagina=1, ta
         # Este bloco só será atingido se o HTTPError NÃO for um dos que acionam retentativa,
         # OU se todas as retentativas para um HTTPError retentável falharem.
         if http_err.response.status_code not in RETRYABLE_STATUS_CODES:
-            logger.error(f"ITENS_API: Erro HTTP NÃO RETENTÁVEL ao buscar itens para {cnpj_orgao}/{ano_compra}/{sequencial_compra} (Pag: {pagina}): {http_err}")
+            logger.error(f"ITENS_API: Erro, HTTP NÃO RETENTÁVEL ou falha em todas as retentativas ao buscar itens para {cnpj_orgao}/{ano_compra}/{sequencial_compra} (Pag: {pagina}): {http_err}")
         # Se foi retentável e falhou todas as vezes, o log de warning da retentativa já ocorreu.
         # Podemos logar um erro final aqui.
         # A tenacity já terá logado os warnings das tentativas.
@@ -181,6 +186,7 @@ def fetch_itens_from_api(cnpj_orgao, ano_compra, sequencial_compra, pagina=1, ta
 
 @api_retry_decorator # Decorador para retentativas    
 def fetch_arquivos_from_api(cnpj_orgao, ano_compra, sequencial_compra, pagina=1, tamanho_pagina=TAMANHO_PAGINA_SYNC ):
+    # """Busca uma página de arquivos de uma licitação específica da API."""
     url = f"{API_BASE_URL_PNCP_API}/v1/orgaos/{cnpj_orgao}/compras/{ano_compra}/{sequencial_compra}/arquivos"
 
     params = {'pagina': pagina, 'tamanhoPagina': tamanho_pagina}
@@ -256,18 +262,19 @@ def salvar_arquivos_no_banco(conn, licitacao_id_local, lista_arquivos_metadata_a
     # Deletar arquivos antigos desta licitação antes de (re)inserir
     try:
         logger.debug(f"ARQUIVOS_SAVE: Garantindo limpeza de arquivos pré-existentes para licitação ID {licitacao_id_local} antes de inserir novos.")
-        cursor.execute("DELETE FROM arquivos_licitacao WHERE licitacao_id = ?", (licitacao_id_local,))
+        cursor.execute("DELETE FROM arquivos_licitacao WHERE licitacao_id = %s", (licitacao_id_local,))
         if cursor.rowcount > 0:
             logger.debug(f"ARQUIVOS_SAVE: {cursor.rowcount} arquivos antigos foram efetivamente deletados para licitação ID {licitacao_id_local}.")
-    except sqlite3.Error as e:
-        logger.exception(f"ARQUIVOS_SAVE: Erro SQLite ao tentar limpar arquivos antigos (lic_id {licitacao_id_local})")
+    except mysql.connector.Error as e:
+        logger.exception(f"ARQUIVOS_SAVE: Erro no Banco de Dados ao tentar limpar arquivos antigos (lic_id {licitacao_id_local})")
         return
 
     sql_insert_arquivo = """
     INSERT INTO arquivos_licitacao (
         licitacao_id, titulo, link_download, dataPublicacaoPncp, anoCompra, statusAtivo
-    ) VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(link_download) DO NOTHING;""" # link_download é UNIQUE
+    ) VALUES (%s, %s, %s, %s, %s, %s)
+    ON DUPLICATE KEY UPDATE licitacao_id = VALUES(licitacao_id);
+    """ # A parte do UPDATE não faz nada de útil, mas transforma o INSERT em um "INSERT IGNORE"
 
     # 1. Preparar a lista de tuplas
     arquivos_para_inserir = []
@@ -309,39 +316,51 @@ def salvar_arquivos_no_banco(conn, licitacao_id_local, lista_arquivos_metadata_a
             # Ele geralmente reflete o número de linhas realmente modificadas/inseridas.
             if cursor.rowcount < len(arquivos_para_inserir):
                 logger.info(f"ARQUIVOS_SAVE: {len(arquivos_para_inserir) - cursor.rowcount} arquivos foram ignorados devido a conflito de 'link_download' (UNIQUE) para lic_id {licitacao_id_local}.")
-        except sqlite3.Error as e:
-            logger.exception(f"ARQUIVOS_SAVE: Erro SQLite durante executemany para licitação ID {licitacao_id_local}")
+        except mysql.connector.Error as e:
+            logger.exception(f"ARQUIVOS_SAVE: Erro no Banco de Dados durante executemany para licitação ID {licitacao_id_local}")
             logger.debug(f"ARQUIVOS_SAVE: Primeiros arquivos na tentativa de lote (max 5): {arquivos_para_inserir[:5]}")
     elif not arquivos_com_dados_invalidos:
         logger.info(f"ARQUIVOS_SAVE: Nenhum arquivo válido encontrado na lista para inserir para lic_id {licitacao_id_local}.")
 
     
-def get_db_connection():
+# Conecta com banco de dados; com retry para erros de conexão.
+def get_db_connection(max_retries=3, delay=2):
     """
-    Retorna uma conexão com o banco de dados SQLite com otimizações para produção.
+    Retorna uma conexão com o banco de dados MariaDB com retry automático
+    para erros de conexão.
     """
-    conn = None
-    try:
-        conn = sqlite3.connect(DATABASE_PATH, timeout=10) # Aumenta o timeout de conexão base
-        conn.row_factory = sqlite3.Row
-
-        # Aplicando PRAGMAs recomendados para performance e concorrência
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA busy_timeout = 5000;") # 5000ms = 5s
-        conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.execute("PRAGMA temp_store = MEMORY;")
-        conn.execute("PRAGMA cache_size = -20000;") # ~20MB de cache por conexão
-
-        logger.debug("Conexão com SQLite DB estabelecida com PRAGMAs otimizados.")
-    except sqlite3.Error as e:
-        logger.critical(f"DB_CONNECTION: Falha CRÍTICA ao conectar ou configurar o banco de dados: {e}")
-        if conn:
-            conn.close() # Tenta fechar se a conexão foi aberta mas o pragma falhou
-        return None
-    return conn
-
-
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            conn = mysql.connector.connect(
+                host=os.getenv('MARIADB_HOST'),
+                user=os.getenv('MARIADB_USER'),
+                password=os.getenv('MARIADB_PASSWORD'),
+                database=os.getenv('MARIADB_DATABASE')
+            )
+            return conn
+        except (errors.InterfaceError, errors.OperationalError) as err:
+            # Problema de rede ou servidor indisponível → vale a pena tentar de novo
+            logger.warning(
+                f"Tentativa {attempt+1}/{max_retries} falhou (erro de conexão): {err}"
+            )
+            attempt += 1
+            time.sleep(delay)
+        except errors.ProgrammingError as err:
+            # Erro de credenciais, banco inexistente, etc → retry não resolve
+            logger.critical(f"Erro de programação (credenciais/SQL inválido): {err}")
+            break
+        except errors.IntegrityError as err:
+            # Violação de constraint (chave duplicada, FK inválida) → retry não resolve
+            logger.critical(f"Erro de integridade: {err}")
+            break
+        except mysql.connector.Error as err:
+            # Qualquer outro erro inesperado
+            logger.critical(f"Erro inesperado no MariaDB: {err}")
+            break
+    logger.error("Falha ao conectar ao banco de dados após múltiplas tentativas.")
+    return None
+# Fim da configuração do banco de dados
 
 def format_datetime_for_api(dt_obj): 
     """Formata um objeto datetime para YYYYMMDD."""
@@ -350,7 +369,6 @@ def format_datetime_for_api(dt_obj):
 @api_retry_decorator # Aplicar o decorador
 def fetch_licitacoes_por_atualizacao(data_inicio_str, data_fim_str, codigo_modalidade_api, pagina=1, tamanho_pagina=TAMANHO_PAGINA_SYNC):
     """Busca licitações da API /v1/contratacoes/atualizacao."""
-    # ... (resto da função similar, com o mesmo padrão de try-except)
     params_api = {
         'dataInicial': data_inicio_str,
         'dataFinal': data_fim_str,
@@ -392,11 +410,12 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     if not validar_dados_licitacao_api(licitacao_api_item):
         logar_falha_persistente("licitacao_principal", licitacao_api_item, "Falha na validação inicial dos dados.")
         return None # Pula o processamento desta licitação
-
-    cursor = conn.cursor()
+    
+    # MODIFICADO: Usar 'dictionary=True' para acessar colunas por nome
+    cursor = conn.cursor(dictionary=True)
       
     # Mapeamento de licitacao_db 
-    licitacao_db_parcial = {
+    licitacao_db_parcial = { # isso aqui cria o dicionario parcial. Para efeito de comparação simples é como se fosse um SELECT * FROM licitacao WHERE id = ?
         'numeroControlePNCP': licitacao_api_item.get('numeroControlePNCP'),
         'numeroCompra': licitacao_api_item.get('numeroCompra'),
         'anoCompra': licitacao_api_item.get('anoCompra'),
@@ -437,8 +456,7 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
         'linkSistemaOrigem': licitacao_api_item.get('linkSistemaOrigem'),
         'justificativaPresencial': licitacao_api_item.get('justificativaPresencial'),        
     }
-
-    
+           
     # Gerar link_portal_pncp
     cnpj_l = licitacao_db_parcial['orgaoEntidadeCnpj']
     ano_l = licitacao_db_parcial['anoCompra']
@@ -456,13 +474,14 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     licitacao_id_local_final = None
     flag_houve_mudanca_real = False
     
-    cursor.execute("SELECT id, dataAtualizacao FROM licitacoes WHERE numeroControlePNCP = ?", (licitacao_db_parcial['numeroControlePNCP'],))
+    cursor.execute("SELECT id, dataAtualizacao FROM licitacoes WHERE numeroControlePNCP = %s", (licitacao_db_parcial['numeroControlePNCP'],))
     row_existente = cursor.fetchone()
     api_data_att_str = licitacao_db_parcial.get('dataAtualizacao')
     api_data_att_dt = datetime.strptime(api_data_att_str, '%Y-%m-%d').date() if api_data_att_str else None
 
     if row_existente:
-        licitacao_id_local_final = row_existente['id']
+        licitacao_id_local_final = row_existente['id']  # modificado para dictionary por causa do cursor ser dictionary=True.
+        # Comparar datas de atualização para ver se houve mudança real
         db_data_att_str = row_existente['dataAtualizacao']
         db_data_att_dt = datetime.strptime(db_data_att_str, '%Y-%m-%d').date() if db_data_att_str else None
         if api_data_att_dt and (not db_data_att_dt or api_data_att_dt > db_data_att_dt):
@@ -470,20 +489,16 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     else:
         flag_houve_mudanca_real = True # Nova licitação, considera como mudança
 
-    # --- Buscar Itens (SEMPRE que houver mudança ou for nova, OU se não tiver itens e quisermos popular) ---
-    # Para determinar 'situacaoReal' com base nos itens, precisamos deles AGORA.
-    # A lógica de 'buscar_sub_detalhes' precisa ser adaptada.
-    # Vamos buscar itens se for nova ou atualizada, ou se o banco não tem itens para ela.
-    
+    # --- Buscar Itens (SEMPRE que houver mudança ou for nova, OU se não tiver itens e quisermos popular) ---    
     itens_da_licitacao_api = [] # Lista de itens buscados da API
     necessita_buscar_itens = False
     if flag_houve_mudanca_real:
         necessita_buscar_itens = True
     elif licitacao_id_local_final: # Se já existe no DB mas não houve mudança na dataAtualizacao
-        cursor.execute("SELECT COUNT(id) FROM itens_licitacao WHERE licitacao_id = ?", (licitacao_id_local_final,))
+        cursor.execute("SELECT COUNT(id) FROM itens_licitacao WHERE licitacao_id = %s", (licitacao_id_local_final,))
         if cursor.fetchone()[0] == 0:
             necessita_buscar_itens = True
-            logger.info(f"INFO (save_db): Licitação {licitacao_db_parcial['numeroControlePNCP']} sem itens no banco. Buscando...")
+            logger.error(f"INFO (save_db): Licitação {licitacao_db_parcial['numeroControlePNCP']} sem itens no banco. Buscando...")
 
 
     if necessita_buscar_itens and licitacao_db_parcial['orgaoEntidadeCnpj'] and licitacao_db_parcial['anoCompra'] and licitacao_db_parcial['sequencialCompra'] is not None:
@@ -583,106 +598,50 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     # --- FIM DA LÓGICA situacaoReal ---
 
 
-    # SQL UPSERT ATUALIZADO
-    sql_upsert_licitacao = """
-    INSERT INTO licitacoes (
-        numeroControlePNCP, numeroCompra, anoCompra, processo,
-        tipolnstrumentoConvocatorioId, tipolnstrumentoConvocatorioNome,
-        modalidadeId, modalidadeNome, modoDisputaId, modoDisputaNome,
-        situacaoCompraId, situacaoCompraNome, objetoCompra, informacaoComplementar, srp,
-        amparoLegalCodigo, amparoLegalNome, amparoLegalDescricao,
-        valorTotalEstimado, valorTotalHomologado, dataAberturaProposta,
-        dataEncerramentoProposta, dataPublicacaoPncp, dataInclusao, dataAtualizacao,
-        sequencialCompra, orgaoEntidadeCnpj, orgaoEntidadeRazaoSocial,
-        orgaoEntidadePoderId, orgaoEntidadeEsferaId, unidadeOrgaoCodigo, unidadeOrgaoNome,
-        unidadeOrgaoCodigoIbge, unidadeOrgaoMunicipioNome, unidadeOrgaoUfSigla,
-        unidadeOrgaoUfNome, usuarioNome, linkSistemaOrigem, 
-        link_portal_pncp, justificativaPresencial, situacaoReal 
-    ) VALUES (
-        :numeroControlePNCP, :numeroCompra, :anoCompra, :processo,
-        :tipolnstrumentoConvocatorioId, :tipolnstrumentoConvocatorioNome,
-        :modalidadeId, :modalidadeNome, :modoDisputaId, :modoDisputaNome,
-        :situacaoCompraId, :situacaoCompraNome, :objetoCompra, :informacaoComplementar, :srp,
-        :amparoLegalCodigo, :amparoLegalNome, :amparoLegalDescricao,
-        :valorTotalEstimado, :valorTotalHomologado, :dataAberturaProposta,
-        :dataEncerramentoProposta, :dataPublicacaoPncp, :dataInclusao, :dataAtualizacao,
-        :sequencialCompra, :orgaoEntidadeCnpj, :orgaoEntidadeRazaoSocial,
-        :orgaoEntidadePoderId, :orgaoEntidadeEsferaId, :unidadeOrgaoCodigo, :unidadeOrgaoNome,
-        :unidadeOrgaoCodigoIbge, :unidadeOrgaoMunicipioNome, :unidadeOrgaoUfSigla,
-        :unidadeOrgaoUfNome, :usuarioNome, :linkSistemaOrigem,
-        :link_portal_pncp, :justificativaPresencial, :situacaoReal 
-    )
-    ON CONFLICT(numeroControlePNCP) DO UPDATE SET
-        numeroCompra = excluded.numeroCompra,
-        anoCompra = excluded.anoCompra,
-        processo = excluded.processo,
-        tipolnstrumentoConvocatorioId = excluded.tipolnstrumentoConvocatorioId,
-        tipolnstrumentoConvocatorioNome = excluded.tipolnstrumentoConvocatorioNome,
-        modalidadeId = excluded.modalidadeId,
-        modalidadeNome = excluded.modalidadeNome,
-        modoDisputaId = excluded.modoDisputaId,
-        modoDisputaNome = excluded.modoDisputaNome,
-        situacaoCompraId = excluded.situacaoCompraId,
-        situacaoCompraNome = excluded.situacaoCompraNome,
-        objetoCompra = excluded.objetoCompra,
-        informacaoComplementar = excluded.informacaoComplementar,
-        srp = excluded.srp,
-        amparoLegalCodigo = excluded.amparoLegalCodigo,
-        amparoLegalNome = excluded.amparoLegalNome,
-        amparoLegalDescricao = excluded.amparoLegalDescricao,
-        valorTotalEstimado = excluded.valorTotalEstimado,
-        valorTotalHomologado = excluded.valorTotalHomologado,
-        dataAberturaProposta = excluded.dataAberturaProposta,
-        dataEncerramentoProposta = excluded.dataEncerramentoProposta,
-        dataPublicacaoPncp = excluded.dataPublicacaoPncp,
-        dataInclusao = excluded.dataInclusao,
-        dataAtualizacao = excluded.dataAtualizacao,
-        sequencialCompra = excluded.sequencialCompra,
-        orgaoEntidadeCnpj = excluded.orgaoEntidadeCnpj,
-        orgaoEntidadeRazaoSocial = excluded.orgaoEntidadeRazaoSocial,
-        orgaoEntidadePoderId = excluded.orgaoEntidadePoderId,
-        orgaoEntidadeEsferaId = excluded.orgaoEntidadeEsferaId,
-        unidadeOrgaoCodigo = excluded.unidadeOrgaoCodigo,
-        unidadeOrgaoNome = excluded.unidadeOrgaoNome,
-        unidadeOrgaoCodigoIbge = excluded.unidadeOrgaoCodigoIbge,
-        unidadeOrgaoMunicipioNome = excluded.unidadeOrgaoMunicipioNome,
-        unidadeOrgaoUfSigla = excluded.unidadeOrgaoUfSigla,
-        unidadeOrgaoUfNome = excluded.unidadeOrgaoUfNome,
-        usuarioNome = excluded.usuarioNome,
-        linkSistemaOrigem = excluded.linkSistemaOrigem,
-        link_portal_pncp = excluded.link_portal_pncp,             
-        justificativaPresencial = excluded.justificativaPresencial,
-        situacaoReal = excluded.situacaoReal
-    WHERE licitacoes.dataAtualizacao < excluded.dataAtualizacao OR licitacoes.dataAtualizacao IS NULL;"""
+    # SQL UPSERT para MariaDB (INSERT ... ON DUPLICATE KEY UPDATE)
+    colunas = licitacao_db_parcial.keys()
+    placeholders = ', '.join(['%s'] * len(colunas))
+    colunas_str = ', '.join(f'`{col}`' for col in colunas)
     
+    updates_str = ', '.join([f'`{col}` = VALUES(`{col}`)' for col in colunas if col != 'numeroControlePNCP'])
+    
+    sql_upsert_licitacao = f"""
+    INSERT INTO licitacoes ({colunas_str})
+    VALUES ({placeholders})
+    ON DUPLICATE KEY UPDATE {updates_str}
+    """
+    # FIM DO BLOCO SUBSTITUÍDO    
     
     try:
-        if flag_houve_mudanca_real: # Só executa UPSERT se for nova ou API tem dados mais novos
-            cursor.execute(sql_upsert_licitacao, licitacao_db_parcial)
-            if cursor.rowcount > 0:
-                if not row_existente: 
-                    licitacao_id_local_final = cursor.lastrowid
-                # (licitacao_id_local_final já tem valor se row_existente)
-                logger.info(f"INFO (SAVE_DB): Licitação {licitacao_db_parcial['numeroControlePNCP']} UPSERTED. ID: {licitacao_id_local_final}. SituacaoReal: {situacao_real_calculada}")
-            elif row_existente:
-                 logger.info(f"INFO (SAVE_DB): Licitação {licitacao_db_parcial['numeroControlePNCP']} não precisou de update. ID: {licitacao_id_local_final}. SituacaoReal: {situacao_real_calculada}")
-        elif row_existente:
-             licitacao_id_local_final = row_existente['id'] # Garante que temos o ID
-             logger.info(f"INFO (SAVE_DB): Licitação {licitacao_db_parcial['numeroControlePNCP']} já atualizada. ID: {licitacao_id_local_final}. SituacaoReal (do DB): {row_existente['situacaoReal'] if 'situacaoReal' in row_existente.keys() else 'N/A'}") # Mostra o do DB
-        
-        if not licitacao_id_local_final and flag_houve_mudanca_real:
-            cursor.execute("SELECT id FROM licitacoes WHERE numeroControlePNCP = ?", (licitacao_db_parcial['numeroControlePNCP'],))
-            id_row = cursor.fetchone()
-            if id_row: licitacao_id_local_final = id_row['id']
+        if flag_houve_mudanca_real:
+            # Prepara os parâmetros como uma tupla na ordem correta
+            params = tuple(licitacao_db_parcial.values())
+            cursor.execute(sql_upsert_licitacao, params)
             
-    except sqlite3.Error as e:
-        logger.exception(f"SAVE_DB: Erro SQLite ao salvar principal {licitacao_db_parcial.get('numeroControlePNCP')}")
-        
+            # Lógica para obter o ID após INSERT ou UPDATE
+            if cursor.lastrowid:
+                licitacao_id_local_final = cursor.lastrowid
+                logger.info(f"INFO (SAVE_DB): Licitação {licitacao_db_parcial['numeroControlePNCP']} INSERIDA. ID: {licitacao_id_local_final}.")
+            else:
+                # Se foi um UPDATE, precisamos buscar o ID
+                cursor.execute("SELECT id FROM licitacoes WHERE numeroControlePNCP = %s", (licitacao_db_parcial['numeroControlePNCP'],))
+                id_row = cursor.fetchone()
+                if id_row: 
+                    licitacao_id_local_final = id_row[0]
+                    logger.info(f"INFO (SAVE_DB): Licitação {licitacao_db_parcial['numeroControlePNCP']} ATUALIZADA. ID: {licitacao_id_local_final}.")
+
+        elif row_existente:
+            licitacao_id_local_final = row_existente['id'] # Em MariaDB, o resultado é uma tupla
+            logger.info(f"INFO (SAVE_DB): Licitação {licitacao_db_parcial['numeroControlePNCP']} já atualizada. ID: {licitacao_id_local_final}.")
+
+    except mysql.connector.Error as err:
+        logger.exception(f"SAVE_DB: Erro MariaDB ao salvar principal {licitacao_db_parcial.get('numeroControlePNCP')}: {err}")
         logar_falha_persistente(
             "licitacao_principal_db_error",
-            licitacao_api_item, # Dados originais da API
-            f"Erro SQLite durante UPSERT: {e}"
+            licitacao_api_item,
+            f"Erro MariaDB durante UPSERT: {err}"
         )
+        cursor.close()
         return None
         
     if not licitacao_id_local_final:
@@ -703,13 +662,14 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     necessita_buscar_arquivos = False # Definir uma flag para arquivos
     if flag_houve_mudanca_real: # Se a licitação principal mudou
         necessita_buscar_arquivos = True
-    elif licitacao_id_local_final: # Se a licitação já existe
+    elif licitacao_id_local_final: # Se a licitação já existe no DB
         # Verificamos se já existem arquivos para ela no banco
-        # Se não existirem, marcamos para buscar.
-        cursor.execute("SELECT COUNT(id) FROM arquivos_licitacao WHERE licitacao_id = ?", (licitacao_id_local_final,))
-        if cursor.fetchone()[0] == 0:
+        # Se não existirem, marcamos para buscar para saber se há arquivos na API dessa vez
+        cursor.execute("SELECT COUNT(id) as total FROM itens_licitacao WHERE licitacao_id = %s", (licitacao_id_local_final,))
+        resultado_contagem = cursor.fetchone()
+        if resultado_contagem and resultado_contagem['total'] == 0:
             necessita_buscar_arquivos = True
-            logger.info(f"INFO (ARQUIVOS): Licitação {licitacao_db_parcial['numeroControlePNCP']} (ID: {licitacao_id_local_final}) sem arquivos no banco. Marcando para busca...")
+            logger.info(f"INFO (ARQUIVOS): Licitação {licitacao_db_parcial['numeroControlePNCP']} (ID: {licitacao_id_local_final}) sem arquivos no banco. Marcando para buscar itens")
 
     if necessita_buscar_arquivos:
         # Verifica se temos os dados necessários para formar a URL da API de arquivos
@@ -773,21 +733,21 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
     try:
         # Deletar itens antigos ANTES do loop, uma única vez
         logger.debug(f"ITENS_SAVE: Garantindo limpeza de itens pré-existentes para licitação ID {licitacao_id_local} antes de inserir novos.")
-        cursor.execute("DELETE FROM itens_licitacao WHERE licitacao_id = ?", (licitacao_id_local,))
+        cursor.execute("DELETE FROM itens_licitacao WHERE licitacao_id = %s", (licitacao_id_local,))
         if cursor.rowcount > 0:
             logger.debug(f"ITENS_SAVE: {cursor.rowcount} itens antigos foram efetivamente deletados para licitação ID {licitacao_id_local}.")
-    except sqlite3.Error as e:
-        logger.exception(f"ITENS_SAVE: Erro SQLite ao tentar limpar itens antigos (lic_id {licitacao_id_local})")
-        return # Aborta se a limpeza falhar
+    except mysql.connector.Error as e:
+        logger.exception(f"ITENS_SAVE: Erro MariaDB ao tentar limpar itens antigos (lic_id {licitacao_id_local})")
+        return
 
     sql_insert_item = """
     INSERT INTO itens_licitacao (
         licitacao_id, numeroItem, descricao, materialOuServicoNome, quantidade,
         unidadeMedida, valorUnitarioEstimado, valorTotal, orcamentoSigiloso,
-        itemCategoriaNome, criterioJulgamentoNome, situacaoCompraItemNome, 
-        tipoBeneficioNome, incentivoProdutivoBasico, dataInclusao,
+        itemCategoriaNome, categoriaItemCatalogo, criterioJulgamentoNome,
+        situacaoCompraItemNome, tipoBeneficioNome, incentivoProdutivoBasico, dataInclusao,
         dataAtualizacao, temResultado, informacaoComplementar
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? )""" # 18 placeholders
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""" # 19 placeholders
 
     # 1. Preparar a lista de tuplas para executemany()
     itens_para_inserir = []
@@ -811,6 +771,7 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
             item_api.get('valorTotal'),
             bool(item_api.get('orcamentoSigiloso')),
             item_api.get('itemCategoriaNome'),
+            item_api.get('categoriaItemCatalogo'),
             item_api.get('criterioJulgamentoNome'),
             item_api.get('situacaoCompraItemNome'),
             item_api.get('tipoBeneficioNome'),
@@ -833,10 +794,8 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
             logger.info(f"ITENS_SAVE: {cursor.rowcount} itens inseridos em lote para licitação ID {licitacao_id_local}.")
             if cursor.rowcount != len(itens_para_inserir):
                  logger.warning(f"ITENS_SAVE: Esperava-se inserir {len(itens_para_inserir)} itens, mas {cursor.rowcount} foram afetados para lic_id {licitacao_id_local}.")
-        except sqlite3.Error as e:
-            # Se um erro ocorrer durante executemany, pode ser mais difícil identificar o item exato
-            # A transação inteira do executemany pode ser revertida pelo SQLite dependendo do erro.
-            logger.exception(f"ITENS_SAVE: Erro SQLite durante executemany para licitação ID {licitacao_id_local}")
+        except mysql.connector.Error as e:
+            logger.exception(f"ITENS_SAVE: Erro no Banco de Dados durante executemany para licitação ID {licitacao_id_local}")
             # Logar os primeiros N itens para ajudar na depuração, se necessário
             logger.debug(f"ITENS_SAVE: Primeiros itens na tentativa de lote (max 5): {itens_para_inserir[:5]}")
     elif not itens_com_dados_invalidos: # Se não há itens para inserir e nenhum foi invalidado
@@ -873,13 +832,13 @@ def sync_licitacoes_ultima_janela_anual():
                 data_inicio_api_str, data_fim_api_str, modalidade_id_sync, pagina_atual
             )
 
-            if licitacoes_data is None: # Se houver muitos erros de API em uma modalidade 
+            if licitacoes_data is None: # Erro
                 erros_api_modalidade += 1
-                if erros_api_modalidade > 9999: # Limite de erros para abortar a modalidade (Vou exagerar para não executar esse erro)
+                if erros_api_modalidade > 4:
                     logger.critical(f"SYNC JANELA: Muitos erros de API para modalidade {modalidade_id_sync}. Abortando esta modalidade.")
                     break 
                 if paginas_restantes == 0 : # Se API indicou erro e fim
-                    logger.critical(f"SYNC JANELA: Muitos erros de API para modalidade {modalidade_id_sync}. Nenhuma página restante. Abortando.")
+                    logger.critical(f"SYNC JANELA: Muitos erros de API para modalidade {modalidade_id_sync}.")
                     break
     
             if not licitacoes_data: # Fim dos dados
@@ -895,7 +854,7 @@ def sync_licitacoes_ultima_janela_anual():
 
             logger.info(f"SYNC JANELA: Modalidade {modalidade_id_sync}, Página {pagina_atual}: Processando {len(licitacoes_data)} licitações.")
             for lic_api in licitacoes_data:
-                save_licitacao_to_db(conn, lic_api) # Removido o set
+                save_licitacao_to_db(conn, lic_api) # Removido o set 
                 licitacoes_processadas_total += 1
             
             conn.commit()

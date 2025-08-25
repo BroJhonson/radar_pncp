@@ -1,0 +1,88 @@
+// scss/pages/_content-pages.scss
+
+// Seletor para aplicar em várias páginas de conteúdo
+.page-blog,
+.page-contato,
+.page-post-individual,
+.page-politica {
+    .main-content {
+        background-color: #fdfdfd;
+    }
+}
+
+// LISTA DE POSTS DO BLOG
+// =========================================================
+.page-blog .blog-post-summary {
+    transition: background-color 0.3s ease;
+    &:hover {
+        background-color: $light;
+    }
+    .blog-list-image {
+        aspect-ratio: 16 / 10;
+        object-fit: cover;
+    }
+}
+
+// POST INDIVIDUAL
+// =========================================================
+.page-post-individual .post-content-body {
+    font-size: 1.1rem;
+    line-height: 1.8;
+    color: $dark;
+
+    p { margin-bottom: 1.5rem; }
+    h2, h3, h4 {
+        margin-top: 2.5rem;
+        margin-bottom: 1rem;
+        font-weight: $font-weight-bold;
+    }
+    a { text-decoration: underline; color: $primary; }
+    blockquote {
+        border-left: 4px solid $primary;
+        padding-left: 1rem;
+        margin: 2rem 0;
+        font-style: italic;
+        color: $secondary;
+    }
+    ul, ol {
+        padding-left: 2rem;
+        margin-bottom: 1.5rem;
+    }
+    code {
+        background-color: #e9ecef;
+        padding: 0.2rem 0.4rem;
+        border-radius: 4px;
+        font-size: 0.9em;
+    }
+    img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+    }
+}
+
+
+// RESPONSIVIDADE PÁGINAS DE CONTEÚDO
+// =========================================================
+@media (max-width: $breakpoint-md) {
+    .page-post-individual,
+    .page-blog,
+    .page-contato,
+    .page-politica {
+        .container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+    }
+
+    .page-post-individual {
+        .blog-post-title {
+            font-size: 1.8rem;
+            line-height: 1.3;
+        }
+        .post-content-body {
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+    }
+}

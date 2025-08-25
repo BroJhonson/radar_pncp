@@ -1,5 +1,6 @@
+import mysql.connector 
+from mysql.connector import errors # Para tratamento de erros
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
-import sqlite3
 import requests  # Para chamar a API do IBGE
 from markupsafe import Markup, escape
 # Para envio de e-mail
@@ -10,6 +11,9 @@ from dotenv import load_dotenv  # Para carregar o arquivo .env
 import csv #Esse e os tres de baixo são para o upload de arquivos CSV
 import io
 from flask import Response
+import unicodedata  # Para normalizar strings (remover acentos, etc.)
+import time
+import datetime
 
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 
@@ -30,31 +34,53 @@ app.logger.info("FLASK_SECRET_KEY carregada com sucesso do ambiente.")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')
 
-# --- Funções Auxiliares para o Banco de Dados ---
-def get_db_connection():
+# --- Função Auxiliares e de Conecção para o Banco de Dados ---
+def get_db_connection(max_retries=3, delay=2):
     """
-    Retorna uma conexão com o banco de dados SQLite com otimizações para produção.
+    Retorna uma conexão com o banco de dados MariaDB com retry automático
+    para erros de conexão.
     """
-    conn = None
-    try:
-        conn = sqlite3.connect(DATABASE_PATH, timeout=10) # Aumenta o timeout de conexão base
-        conn.row_factory = sqlite3.Row
+    attempt = 0
+    while attempt < max_retries:
+        try:
+            conn = mysql.connector.connect(
+                host=os.getenv('MARIADB_HOST'),
+                user=os.getenv('MARIADB_USER'),
+                password=os.getenv('MARIADB_PASSWORD'),
+                database=os.getenv('MARIADB_DATABASE')
+            )
+            return conn
+        except (errors.InterfaceError, errors.OperationalError) as err:
+            # Problema de rede ou servidor indisponível → vale a pena tentar de novo
+            app.logger.warning(
+                f"Tentativa {attempt+1}/{max_retries} falhou (erro de conexão): {err}"
+            )
+            attempt += 1
+            time.sleep(delay)
+        except errors.ProgrammingError as err:
+            # Erro de credenciais, banco inexistente, etc → retry não resolve
+            app.logger.error(f"Erro de programação (credenciais/SQL inválido): {err}")
+            break
+        except errors.IntegrityError as err:
+            # Violação de constraint (chave duplicada, FK inválida) → retry não resolve
+            app.logger.error(f"Erro de integridade: {err}")
+            break
+        except mysql.connector.Error as err:
+            # Qualquer outro erro inesperado
+            app.logger.error(f"Erro inesperado no MariaDB: {err}")
+            break
+    app.logger.error("Falha ao conectar ao banco de dados após múltiplas tentativas.")
+    return None
 
-        # Aplicando PRAGMAs recomendados para performance e concorrência
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA foreign_keys = ON;")
-        conn.execute("PRAGMA busy_timeout = 5000;") # 5000ms = 5s
-        conn.execute("PRAGMA synchronous = NORMAL;")
-        conn.execute("PRAGMA temp_store = MEMORY;")
-        conn.execute("PRAGMA cache_size = -20000;") # ~20MB de cache por conexão
-
-        logger.debug("Conexão com SQLite DB estabelecida com PRAGMAs otimizados.")
-    except sqlite3.Error as e:
-        logger.critical(f"DB_CONNECTION: Falha CRÍTICA ao conectar ou configurar o banco de dados: {e}")
-        if conn:
-            conn.close() # Tenta fechar se a conexão foi aberta mas o pragma falhou
+# --- Função para formatar datas em JSON ---
+def formatar_datas_para_json(licitacao_dict):
+    """Converte objetos date/datetime em strings ISO para serialização JSON."""
+    if licitacao_dict is None:
         return None
-    return conn
+    for key, value in licitacao_dict.items():
+        if isinstance(value, (datetime.date, datetime.datetime)):
+            licitacao_dict[key] = value.isoformat()
+    return licitacao_dict
 
 # --- Filtro personalizado nl2br para quebra de linha ---
 def nl2br_filter(value):
@@ -268,206 +294,201 @@ def processar_contato():
     return redirect(url_for('pagina_contato'))
 
  
-# ===========================================---- ROTAS BACKEND (API Principal) ----============================================
-@app.route('/licitacoes', methods=['GET'])
-def get_licitacoes():
-    filtros = {
-        'ufs': request.args.getlist('uf'),
-        'modalidadesId': request.args.getlist('modalidadeId', type=int),
-        'statusId': request.args.get('status', default=None, type=int),
-        'dataPubInicio': request.args.get('dataPubInicio', default=None, type=str),
-        'dataPubFim': request.args.get('dataPubFim', default=None, type=str),
-        'valorMin': request.args.get('valorMin', default=None, type=float),
-        'valorMax': request.args.get('valorMax', default=None, type=float),
-        'municipiosNome': request.args.getlist('municipioNome'),
-        'dataAtualizacaoInicio': request.args.get('dataAtualizacaoInicio', default=None, type=str),
-        'dataAtualizacaoFim': request.args.get('dataAtualizacaoFim', default=None, type=str),
-        'palavrasChave': request.args.getlist('palavraChave'),
-        'excluirPalavras': request.args.getlist('excluirPalavra'),
-        'anoCompra': request.args.get('anoCompra', type=int),
-        'cnpjOrgao': request.args.get('cnpjOrgao'),
-        'statusRadar': request.args.get('statusRadar', default=None, type=str)
-    }
-
-    pagina = request.args.get('pagina', default=1, type=int)
-    if pagina < 1:
-        pagina = 1
-    por_pagina = request.args.get('porPagina', default=20, type=int)
-    if por_pagina < 1:
-        por_pagina = 20
-    elif por_pagina > 100:
-        por_pagina = 100
-
-    offset = (pagina - 1) * por_pagina
-
-    orderBy_param = request.args.get('orderBy', default='dataPublicacaoPncp', type=str)
-    orderDir_param = request.args.get('orderDir', default='DESC', type=str).upper()
-
-    # Validação para evitar injeção de SQL
-    campos_validos_ordenacao = [
-        'dataPublicacaoPncp', 'dataAtualizacao', 'valorTotalEstimado',
-        'dataAberturaProposta', 'dataEncerramentoProposta', 'modalidadeNome',
-        'orgaoEntidadeRazaoSocial', 'unidadeOrgaoMunicipioNome',
-        'situacaoReal'
-    ]
-
-    if orderBy_param not in campos_validos_ordenacao:
-        return jsonify({
-            "erro": "Parâmetro de ordenação inválido",
-            "detalhes": f"O valor '{orderBy_param}' para 'orderBy' não é válido. Campos válidos: {', '.join(campos_validos_ordenacao)}."
-        }), 400
-
-    if orderDir_param not in ['ASC', 'DESC']:
-        return jsonify({
-            "erro": "Parâmetro de direção de ordenação inválido",
-            "detalhes": f"O valor '{orderDir_param}' para 'orderDir' não é válido. Use 'ASC' ou 'DESC'."
-        }), 400
-
+# ===========================================---- ROTAS BACKEND (API Principal) ----============================================ #
+def _build_licitacoes_query(filtros):
+    """
+    Constrói a cláusula WHERE para MariaDB, com busca case-insensitive.
+    """
     condicoes_db = []
     parametros_db = []
 
-    if filtros['statusRadar']:
-        condicoes_db.append("situacaoReal = ?")
+    # --- Filtros normais (status, datas, etc.) ---
+    if filtros.get('statusRadar'):
+        condicoes_db.append("situacaoReal = %s")
         parametros_db.append(filtros['statusRadar'])
-    elif filtros['statusId'] is not None:
-        condicoes_db.append("situacaoCompraId = ?")
+    elif filtros.get('statusId') is not None:
+        condicoes_db.append("situacaoCompraId = %s")
         parametros_db.append(filtros['statusId'])
 
-    if filtros['ufs']:
-        placeholders = ', '.join(['?'] * len(filtros['ufs']))
+    if filtros.get('ufs'):
+        placeholders = ', '.join(['%s'] * len(filtros['ufs']))
         condicoes_db.append(f"unidadeOrgaoUfSigla IN ({placeholders})")
         parametros_db.extend([uf.upper() for uf in filtros['ufs']])
 
-    if filtros['modalidadesId']:
-        placeholders = ', '.join(['?'] * len(filtros['modalidadesId']))
+    if filtros.get('modalidadesId'):
+        placeholders = ', '.join(['%s'] * len(filtros['modalidadesId']))
         condicoes_db.append(f"modalidadeId IN ({placeholders})")
         parametros_db.extend(filtros['modalidadesId'])
 
-    if filtros['excluirPalavras']:
-        campos_texto_busca = [
-            "objetoCompra", "orgaoEntidadeRazaoSocial", "unidadeOrgaoNome",
-            "numeroControlePNCP", "unidadeOrgaoMunicipioNome", "unidadeOrgaoUfNome",
-            "CAST(unidadeOrgaoCodigoIbge AS TEXT)", "orgaoEntidadeCnpj"
-        ]
-        for palavra_excluir in filtros['excluirPalavras']:
-            termo_excluir = f"%{palavra_excluir}%"
-            condicoes_palavra_excluir_and = []
-            for campo in campos_texto_busca:
-                condicoes_palavra_excluir_and.append(f"COALESCE({campo}, '') NOT LIKE ?")
-                parametros_db.append(termo_excluir)
-            if condicoes_palavra_excluir_and:
-                condicoes_db.append(f"({' AND '.join(condicoes_palavra_excluir_and)})")
-
-    if filtros['palavrasChave']:
-        campos_texto_busca = [
-            "objetoCompra", "orgaoEntidadeRazaoSocial", "unidadeOrgaoNome",
-            "numeroControlePNCP", "unidadeOrgaoMunicipioNome", "unidadeOrgaoUfNome",
-            "CAST(unidadeOrgaoCodigoIbge AS TEXT)", "orgaoEntidadeCnpj"
-        ]
-        sub_condicoes_palavras_or_geral = []
-        for palavra_chave in filtros['palavrasChave']:
-            termo_like = f"%{palavra_chave}%"
-            condicoes_campos_or_para_palavra = []
-            for campo in campos_texto_busca:
-                condicoes_campos_or_para_palavra.append(f"COALESCE({campo}, '') LIKE ?")
-                parametros_db.append(termo_like)
-            if condicoes_campos_or_para_palavra:
-                sub_condicoes_palavras_or_geral.append(f"({' OR '.join(condicoes_campos_or_para_palavra)})")
-        if sub_condicoes_palavras_or_geral:
-            condicoes_db.append(f"({' OR '.join(sub_condicoes_palavras_or_geral)})")
-
-    if filtros['dataPubInicio']:
-        condicoes_db.append("dataPublicacaoPncp >= ?")
+    if filtros.get('dataPubInicio'):
+        condicoes_db.append("dataPublicacaoPncp >= %s")
         parametros_db.append(filtros['dataPubInicio'])
-    if filtros['dataPubFim']:
-        condicoes_db.append("dataPublicacaoPncp <= ?")
+    if filtros.get('dataPubFim'):
+        condicoes_db.append("dataPublicacaoPncp <= %s")
         parametros_db.append(filtros['dataPubFim'])
 
-    if filtros['valorMin'] is not None:
-        condicoes_db.append("valorTotalEstimado >= ?")
+    if filtros.get('valorMin') is not None:
+        condicoes_db.append("valorTotalEstimado >= %s")
         parametros_db.append(filtros['valorMin'])
-    if filtros['valorMax'] is not None:
-        condicoes_db.append("valorTotalEstimado <= ?")
+    if filtros.get('valorMax') is not None:
+        condicoes_db.append("valorTotalEstimado <= %s")
         parametros_db.append(filtros['valorMax'])
 
-    if filtros['dataAtualizacaoInicio']:
-        condicoes_db.append("dataAtualizacao >= ?")
+    if filtros.get('dataAtualizacaoInicio'):
+        condicoes_db.append("dataAtualizacao >= %s")
         parametros_db.append(filtros['dataAtualizacaoInicio'])
-    if filtros['dataAtualizacaoFim']:
-        condicoes_db.append("dataAtualizacao <= ?")
+    if filtros.get('dataAtualizacaoFim'):
+        condicoes_db.append("dataAtualizacao <= %s")
         parametros_db.append(filtros['dataAtualizacaoFim'])
 
-    if filtros['anoCompra'] is not None:
-        condicoes_db.append("anoCompra = ?")
-        parametros_db.append(filtros['anoCompra'])
+    if filtros.get('municipiosNome'):
+        placeholders = ', '.join(['%s'] * len(filtros['municipiosNome']))
+        condicoes_db.append(f"unidadeOrgaoMunicipioNome IN ({placeholders})")
+        parametros_db.extend(filtros['municipiosNome'])
 
-    if filtros['cnpjOrgao']:
-        condicoes_db.append("orgaoEntidadeCnpj = ?")
+    if filtros.get('anoCompra') is not None:
+        condicoes_db.append("anoCompra = %s")
+        parametros_db.append(filtros['anoCompra'])
+    if filtros.get('cnpjOrgao'):
+        condicoes_db.append("orgaoEntidadeCnpj = %s")
         parametros_db.append(filtros['cnpjOrgao'])
 
-    if filtros['municipiosNome']:
-        sub_condicoes_municipio = []
-        for nome_mun in filtros['municipiosNome']:
-            termo_mun = f"%{nome_mun.upper()}%"
-            sub_condicoes_municipio.append("UPPER(unidadeOrgaoMunicipioNome) LIKE ?")
-            parametros_db.append(termo_mun)
-        if sub_condicoes_municipio:
-            condicoes_db.append(f"({ ' OR '.join(sub_condicoes_municipio) })")
+    # --- Filtros de Texto ---
+    campos_texto_busca = ["objetoCompra", "orgaoEntidadeRazaoSocial", "unidadeOrgaoNome", "numeroControlePNCP", "unidadeOrgaoMunicipioNome", "unidadeOrgaoUfNome", "orgaoEntidadeCnpj"]
+    
+    # Inclusão
+    if filtros.get('palavrasChave'):
+        for palavra in filtros['palavrasChave']:
+            # Bloco (campo1 LIKE %p% COLLATE utf8mb4_general_ci OR ...)
+            like_exprs = [f"{campo} LIKE %s COLLATE utf8mb4_general_ci" for campo in campos_texto_busca]
+            condicoes_db.append(f"({' OR '.join(like_exprs)})")
+            parametros_db.extend([f"%{palavra}%"] * len(campos_texto_busca))
+    
+    # Exclusão
+    if filtros.get('excluirPalavras'):
+        for palavra in filtros['excluirPalavras']:
+            # Bloco NOT (campo1 LIKE %p% COLLATE utf8mb4_general_ci OR ...)
+            like_exprs = [f"{campo} LIKE %s COLLATE utf8mb4_general_ci" for campo in campos_texto_busca]
+            condicoes_db.append(f"NOT ({' OR '.join(like_exprs)})")
+            parametros_db.extend([f"%{palavra}%"] * len(campos_texto_busca))
 
-    query_select_dados = "SELECT * FROM licitacoes"
-    query_select_contagem = "SELECT COUNT(id) FROM licitacoes"
     query_where = ""
     if condicoes_db:
         query_where = " WHERE " + " AND ".join(condicoes_db)
+    
+    return query_where, parametros_db
 
-    query_order_limit_offset_dados = f" ORDER BY {orderBy_param} {orderDir_param} LIMIT ? OFFSET ?"
+@app.route('/licitacoes', methods=['GET'])
+def get_licitacoes():
+    # 1. Coleta e valida os parâmetros de paginação/ordenação
+    pagina = request.args.get('pagina', default=1, type=int)
+    por_pagina = request.args.get('porPagina', default=20, type=int)
+    orderBy_param = request.args.get('orderBy', default='dataAtualizacao', type=str)
+    orderDir_param = request.args.get('orderDir', default='DESC', type=str).upper()
 
-    sql_query_dados_final = query_select_dados + query_where + query_order_limit_offset_dados
-    parametros_dados_sql_final = parametros_db + [por_pagina, offset]
+    if pagina < 1:
+        pagina = 1
+    if por_pagina not in [10, 20, 50, 100]:
+        por_pagina = 20
 
-    sql_query_contagem_final = query_select_contagem + query_where
+    campos_validos_ordenacao = [
+        'dataPublicacaoPncp', 'dataAtualizacao', 'valorTotalEstimado',
+        'dataAberturaProposta', 'dataEncerramentoProposta', 'modalidadeNome',
+        'orgaoEntidadeRazaoSocial', 'unidadeOrgaoMunicipioNome', 'situacaoReal'
+    ]
+    if orderBy_param not in campos_validos_ordenacao:
+        return jsonify({"erro": "Parâmetro de ordenação inválido."}), 400
+    if orderDir_param not in ['ASC', 'DESC']:
+        return jsonify({"erro": "Parâmetro de direção de ordenação inválido."}), 400
 
+    # 2. Coleta todos os filtros em um único dicionário
+    filtros = {
+        'ufs': request.args.getlist('uf'),
+        'modalidadesId': request.args.getlist('modalidadeId', type=int),
+        'statusRadar': request.args.get('statusRadar'),
+        'dataPubInicio': request.args.get('dataPubInicio'),
+        'dataPubFim': request.args.get('dataPubFim'),
+        'valorMin': request.args.get('valorMin', type=float),
+        'valorMax': request.args.get('valorMax', type=float),
+        'municipiosNome': request.args.getlist('municipioNome'),
+        'dataAtualizacaoInicio': request.args.get('dataAtualizacaoInicio'),
+        'dataAtualizacaoFim': request.args.get('dataAtualizacaoFim'),
+        'anoCompra': request.args.get('anoCompra', type=int),
+        'cnpjOrgao': request.args.get('cnpjOrgao'),
+        'statusId': request.args.get('statusId', type=int),
+        'palavrasChave': request.args.getlist('palavraChave'),
+        'excluirPalavras': request.args.getlist('excluirPalavra')
+    }
+    # Limpa filtros vazios ou nulos
+    filtros = {k: v for k, v in filtros.items() if v is not None and v != '' and v != []}
+
+    # 3. Monta a cláusula WHERE e os parâmetros usando a função centralizada
+    query_where, parametros_db = _build_licitacoes_query(filtros)
+
+    # 4. Monta as queries de contagem e de dados
+    query_contagem = f"SELECT COUNT(*) as total FROM licitacoes {query_where}"
+    
+    query_select_dados = f"""
+        SELECT * FROM licitacoes
+        {query_where}
+        ORDER BY {orderBy_param} {orderDir_param}
+        LIMIT %s OFFSET %s
+    """
+    
     conn = get_db_connection()
-    cursor = conn.cursor()
+    if not conn:
+        return jsonify({"erro": "Falha na conexão com o banco de dados."}), 503
+
     licitacoes_lista = []
     total_registros = 0
     try:
-        cursor.execute(sql_query_dados_final, parametros_dados_sql_final)
-        licitacoes_rows = cursor.fetchall()
-        licitacoes_lista = [dict(row) for row in licitacoes_rows]
+        # Cria cursores que retornam dicionários
+        cursor_dados = conn.cursor(dictionary=True)
+        cursor_contagem = conn.cursor(dictionary=True)
 
-        cursor.execute(sql_query_contagem_final, parametros_db)
-        total_registros_fetch = cursor.fetchone()
-        if total_registros_fetch:
-            total_registros = total_registros_fetch[0]
+        # Executa a query de contagem total
+        cursor_contagem.execute(query_contagem, parametros_db)
+        resultado_contagem = cursor_contagem.fetchone()
+        if resultado_contagem:
+            total_registros = resultado_contagem['total']
 
-    except sqlite3.Error as e:
-        print(f"Erro ao buscar/contar no banco local: {e}")
-        if conn:
-            conn.close()
-        return jsonify({"erro": "Erro interno ao processar sua busca.", "detalhes": str(e)}), 500
+        # Executa a query de dados com paginação
+        parametros_dados_sql = parametros_db + [por_pagina, (pagina - 1) * por_pagina]
+        cursor_dados.execute(query_select_dados, parametros_dados_sql)
+        licitacoes_lista_bruta = cursor_dados.fetchall()
+        
+        # FORMATAÇÃO AQUI
+        licitacoes_lista = [formatar_datas_para_json(row) for row in licitacoes_lista_bruta]
+
+
+    except mysql.connector.Error as err:
+        app.logger.error(f"Erro de SQL em get_licitacoes: {err}")
+        return jsonify({"erro": "Erro interno ao processar sua busca.", "detalhes": str(err)}), 500
     finally:
-        if conn:
+        if conn and conn.is_connected():    # Verifica se a conexão e o cursor estão abertos, se tiverem então fecha
+            if 'cursor_dados' in locals():
+                cursor_dados.close()
+            if 'cursor_contagem' in locals():
+                cursor_contagem.close()
             conn.close()
 
-    total_paginas_final = (total_registros + por_pagina - 1) // por_pagina if por_pagina > 0 and total_registros > 0 else 0
-    if total_registros == 0:
-        total_paginas_final = 0
+    total_paginas = (total_registros + por_pagina - 1) // por_pagina if por_pagina > 0 else 0
 
     return jsonify({
         "pagina_atual": pagina,
         "por_pagina": por_pagina,
         "total_registros": total_registros,
-        "total_paginas": total_paginas_final,
-        "origem_dados": "banco_local_janela_anual",
+        "total_paginas": total_paginas,
+        "origem_dados": "banco_local_com_filtro_sql",
         "licitacoes": licitacoes_lista
     })
+
 
 @app.route('/licitacao/<path:numero_controle_pncp>', methods=['GET'])
 def get_detalhe_licitacao(numero_controle_pncp):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    query_licitacao_principal = "SELECT * FROM licitacoes WHERE numeroControlePNCP = ?"
+    cursor = conn.cursor(dictionary=True)
+    query_licitacao_principal = "SELECT * FROM licitacoes WHERE numeroControlePNCP = %s"
     cursor.execute(query_licitacao_principal, (numero_controle_pncp,))
     licitacao_principal_row = cursor.fetchone()
 
@@ -475,18 +496,18 @@ def get_detalhe_licitacao(numero_controle_pncp):
         conn.close()
         return jsonify({"erro": "Licitação não encontrada", "numeroControlePNCP": numero_controle_pncp}), 404
 
-    licitacao_principal_dict = dict(licitacao_principal_row)
+    licitacao_principal_dict = formatar_datas_para_json(licitacao_principal_row)
     licitacao_id_local = licitacao_principal_dict['id']
 
-    query_itens = "SELECT * FROM itens_licitacao WHERE licitacao_id = ?"
+    query_itens = "SELECT * FROM itens_licitacao WHERE licitacao_id = %s"
     cursor.execute(query_itens, (licitacao_id_local,))
     itens_rows = cursor.fetchall()
-    itens_lista = [dict(row) for row in itens_rows]
+    itens_lista = [formatar_datas_para_json(row) for row in itens_rows]
 
-    query_arquivos = "SELECT * FROM arquivos_licitacao WHERE licitacao_id = ?"
+    query_arquivos = "SELECT * FROM arquivos_licitacao WHERE licitacao_id = %s"
     cursor.execute(query_arquivos, (licitacao_id_local,))
     arquivos_rows = cursor.fetchall()
-    arquivos_lista = [dict(row) for row in arquivos_rows]
+    arquivos_lista = [formatar_datas_para_json(row) for row in arquivos_rows]
 
     conn.close()
 
@@ -500,7 +521,7 @@ def get_detalhe_licitacao(numero_controle_pncp):
 @app.route('/referencias/modalidades', methods=['GET'])
 def get_modalidades_referencia():
     conn = get_db_connection()
-    cursor = conn.cursor()
+    cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT DISTINCT modalidadeId, modalidadeNome FROM licitacoes ORDER BY modalidadeNome")
     modalidades = [dict(row) for row in cursor.fetchall()]
     conn.close()
@@ -509,7 +530,7 @@ def get_modalidades_referencia():
 @app.route('/referencias/statuscompra', methods=['GET'])
 def get_statuscompra_referencia():
     conn = get_db_connection()
-    cursor = conn.cursor()
+    cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT DISTINCT situacaoCompraId, situacaoCompraNome FROM licitacoes ORDER BY situacaoCompraNome")
     status_compra = [dict(row) for row in cursor.fetchall()]
     conn.close()
@@ -518,7 +539,7 @@ def get_statuscompra_referencia():
 @app.route('/referencias/statusradar', methods=['GET'])
 def get_statusradar_referencia():
     conn = get_db_connection()
-    cursor = conn.cursor()
+    cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT DISTINCT situacaoReal FROM licitacoes WHERE situacaoReal IS NOT NULL ORDER BY situacaoReal")
     status_radar_rows = cursor.fetchall()
     status_radar = [{"id": row['situacaoReal'], "nome": row['situacaoReal']} for row in status_radar_rows]
@@ -575,158 +596,71 @@ def api_get_referencia_statuscompra():
            
 # EXPORTAR CSV - Mantendo separado de def get_licitacoes() sem refatorar posso enviar mais coisas ou menos. 
 @app.route('/api/exportar-csv')
-def exportar_csv():    
+def exportar_csv():
+    # 1. Coleta todos os filtros da URL em um único dicionário
     filtros = {
         'ufs': request.args.getlist('uf'),
         'modalidadesId': request.args.getlist('modalidadeId', type=int),
-        'statusRadar': request.args.get('statusRadar', default=None, type=str),
-        'dataPubInicio': request.args.get('dataPubInicio', default=None, type=str),
-        'dataPubFim': request.args.get('dataPubFim', default=None, type=str),
-        'valorMin': request.args.get('valorMin', default=None, type=float),
-        'valorMax': request.args.get('valorMax', default=None, type=float),
+        'statusRadar': request.args.get('statusRadar'),
+        'dataPubInicio': request.args.get('dataPubInicio'),
+        'dataPubFim': request.args.get('dataPubFim'),
+        'valorMin': request.args.get('valorMin', type=float),
+        'valorMax': request.args.get('valorMax', type=float),
         'municipiosNome': request.args.getlist('municipioNome'),
-        'dataAtualizacaoInicio': request.args.get('dataAtualizacaoInicio', default=None, type=str),
-        'dataAtualizacaoFim': request.args.get('dataAtualizacaoFim', default=None, type=str),
-        'palavrasChave': request.args.getlist('palavraChave'),
-        'excluirPalavras': request.args.getlist('excluirPalavra'),
-        'statusId': request.args.get('status', default=None, type=int),
+        'dataAtualizacaoInicio': request.args.get('dataAtualizacaoInicio'),
+        'dataAtualizacaoFim': request.args.get('dataAtualizacaoFim'),
         'anoCompra': request.args.get('anoCompra', type=int),
         'cnpjOrgao': request.args.get('cnpjOrgao'),
+        'statusId': request.args.get('statusId', type=int),
+        'palavrasChave': request.args.getlist('palavraChave'),
+        'excluirPalavras': request.args.getlist('excluirPalavra')
     }
-    orderBy_param = request.args.get('orderBy', default='dataPublicacaoPncp', type=str)
-    orderDir_param = request.args.get('orderDir', default='DESC', type=str).upper()
-
-    condicoes_db = []
-    parametros_db = []
+    # Limpa filtros que não foram preenchidos
+    filtros = {k: v for k, v in filtros.items() if v is not None and v != '' and v != []}
     
-    if filtros['statusRadar']:
-        condicoes_db.append("situacaoReal = ?")
-        parametros_db.append(filtros['statusRadar'])
-    elif filtros['statusId'] is not None:
-        condicoes_db.append("situacaoCompraId = ?")
-        parametros_db.append(filtros['statusId'])
+    # Coleta parâmetros de ordenação
+    orderBy_param = request.args.get('orderBy', default='dataPublicacaoPncp')
+    orderDir_param = request.args.get('orderDir', default='DESC').upper()
 
-    if filtros['ufs']:
-        placeholders = ', '.join(['?'] * len(filtros['ufs']))
-        condicoes_db.append(f"unidadeOrgaoUfSigla IN ({placeholders})")
-        parametros_db.extend([uf.upper() for uf in filtros['ufs']])
-
-    if filtros['modalidadesId']:
-        placeholders = ', '.join(['?'] * len(filtros['modalidadesId']))
-        condicoes_db.append(f"modalidadeId IN ({placeholders})")
-        parametros_db.extend(filtros['modalidadesId'])
-
-    if filtros['excluirPalavras']:
-        campos_texto_busca = [
-            "objetoCompra", "orgaoEntidadeRazaoSocial", "unidadeOrgaoNome",
-            "numeroControlePNCP", "unidadeOrgaoMunicipioNome", "unidadeOrgaoUfNome",
-            "CAST(unidadeOrgaoCodigoIbge AS TEXT)", "orgaoEntidadeCnpj"
-        ]
-        for palavra_excluir in filtros['excluirPalavras']:
-            termo_excluir = f"%{palavra_excluir}%"
-            condicoes_palavra_excluir_and = []
-            for campo in campos_texto_busca:
-                condicoes_palavra_excluir_and.append(f"COALESCE({campo}, '') NOT LIKE ?")
-                parametros_db.append(termo_excluir)
-            if condicoes_palavra_excluir_and:
-                condicoes_db.append(f"({' AND '.join(condicoes_palavra_excluir_and)})")
-
-    if filtros['palavrasChave']:
-        campos_texto_busca = [
-            "objetoCompra", "orgaoEntidadeRazaoSocial", "unidadeOrgaoNome",
-            "numeroControlePNCP", "unidadeOrgaoMunicipioNome", "unidadeOrgaoUfNome",
-            "CAST(unidadeOrgaoCodigoIbge AS TEXT)", "orgaoEntidadeCnpj"
-        ]
-        sub_condicoes_palavras_or_geral = []
-        for palavra_chave in filtros['palavrasChave']:
-            termo_like = f"%{palavra_chave}%"
-            condicoes_campos_or_para_palavra = []
-            for campo in campos_texto_busca:
-                condicoes_campos_or_para_palavra.append(f"COALESCE({campo}, '') LIKE ?")
-                parametros_db.append(termo_like)
-            if condicoes_campos_or_para_palavra:
-                sub_condicoes_palavras_or_geral.append(f"({' OR '.join(condicoes_campos_or_para_palavra)})")
-        if sub_condicoes_palavras_or_geral:
-            condicoes_db.append(f"({' OR '.join(sub_condicoes_palavras_or_geral)})")
-
-    if filtros['dataPubInicio']:
-        condicoes_db.append("dataPublicacaoPncp >= ?")
-        parametros_db.append(filtros['dataPubInicio'])
-    if filtros['dataPubFim']:
-        condicoes_db.append("dataPublicacaoPncp <= ?")
-        parametros_db.append(filtros['dataPubFim'])
-
-    if filtros['valorMin'] is not None:
-        condicoes_db.append("valorTotalEstimado >= ?")
-        parametros_db.append(filtros['valorMin'])
-    if filtros['valorMax'] is not None:
-        condicoes_db.append("valorTotalEstimado <= ?")
-        parametros_db.append(filtros['valorMax'])
-
-    if filtros['dataAtualizacaoInicio']:
-        condicoes_db.append("dataAtualizacao >= ?")
-        parametros_db.append(filtros['dataAtualizacaoInicio'])
-    if filtros['dataAtualizacaoFim']:
-        condicoes_db.append("dataAtualizacao <= ?")
-        parametros_db.append(filtros['dataAtualizacaoFim'])
-
-    if filtros['anoCompra'] is not None:
-        condicoes_db.append("anoCompra = ?")
-        parametros_db.append(filtros['anoCompra'])
-
-    if filtros['cnpjOrgao']:
-        condicoes_db.append("orgaoEntidadeCnpj = ?")
-        parametros_db.append(filtros['cnpjOrgao'])
-
-    if filtros['municipiosNome']:
-        sub_condicoes_municipio = []
-        for nome_mun in filtros['municipiosNome']:
-            termo_mun = f"%{nome_mun.upper()}%"
-            sub_condicoes_municipio.append("UPPER(unidadeOrgaoMunicipioNome) LIKE ?")
-            parametros_db.append(termo_mun)
-        if sub_condicoes_municipio:
-            condicoes_db.append(f"({ ' OR '.join(sub_condicoes_municipio) })")
-
-    # 2. Conecte ao banco e faça a busca SEM paginação
+    # 2. Usa a função central para construir a cláusula WHERE e os parâmetros
+    query_where_sql, parametros_db_sql = _build_licitacoes_query(filtros)
+    
+    # 3. Monta a query final de seleção (sem paginação para exportar tudo)
+    query_select_dados = f"SELECT * FROM licitacoes {query_where_sql} ORDER BY {orderBy_param} {orderDir_param}"
+    
     conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    query_select = "SELECT * FROM licitacoes"
-    query_where = ""
-    if condicoes_db:
-        query_where = " WHERE " + " AND ".join(condicoes_db)
-    
-    # A ÚNICA DIFERENÇA: SEM LIMIT E OFFSET
-    query_order = f" ORDER BY {orderBy_param} {orderDir_param}"
-    sql_query_final = query_select + query_where + query_order
- 
+    licitacoes_filtradas = []
     try:
-        cursor.execute(sql_query_final, parametros_db)
-        licitacoes_rows = cursor.fetchall()
-        licitacoes = [dict(row) for row in licitacoes_rows]
-    except sqlite3.Error as e:
-        print(f"Erro ao exportar CSV: {e}")
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(query_select_dados, parametros_db_sql)
+        # O resultado do banco já está completamente filtrado
+        licitacoes_filtradas = cursor.fetchall()
+    except mysql.connector.Error as e:
+        app.logger.error(f"Erro ao buscar dados para exportar CSV: {e}")
         return jsonify({"erro": "Erro ao buscar dados para exportação"}), 500
     finally:
-        if conn:
+        if conn and conn.is_connected():
+            if 'cursor' in locals():
+                cursor.close()
             conn.close()
 
-    # 3. Gere o CSV em memória
+
+    # 4. Geração do CSV em memória
     output = io.StringIO()
-    # Usamos QUOTE_ALL para garantir que valores com ';' ou quebras de linha sejam tratados corretamente
     writer = csv.writer(output, delimiter=';', lineterminator='\n', quoting=csv.QUOTE_ALL)
     
-    # Escreve o cabeçalho
+    # Cabeçalho do CSV
     writer.writerow(['Data Atualizacao', 'Municipio/UF', 'Orgao', 'Modalidade', 'Status', 'Valor Estimado (R$)', 'Objeto da Compra', 'Link PNCP'])
 
-    # Escreve os dados
-    for lic in licitacoes:
+    # Escreve as linhas de dados
+    for lic in licitacoes_filtradas:
         municipio_uf = f"{lic.get('unidadeOrgaoMunicipioNome', '')}/{lic.get('unidadeOrgaoUfSigla', '')}"
-        # Formata o valor para o padrão brasileiro (vírgula como decimal)
+        
         valor_str = 'N/I'
         if lic.get('valorTotalEstimado') is not None:
+            # Formata o valor como moeda brasileira
             valor_str = f"{lic['valorTotalEstimado']:.2f}".replace('.', ',')
-
+            
         writer.writerow([
             lic.get('dataAtualizacao', ''),
             municipio_uf,
@@ -738,10 +672,10 @@ def exportar_csv():
             lic.get('link_portal_pncp', '')
         ])
 
-    # 4. Prepara a resposta para download
-    output.seek(0)    
+    # 5. Prepara a resposta HTTP para o download do arquivo
+    output.seek(0)
     return Response(
-        output.getvalue().encode('utf-8-sig'), # 'utf-8-sig' é melhor para compatibilidade com Excel
+        output.getvalue().encode('utf-8-sig'), # utf-8-sig para compatibilidade com Excel
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment;filename=radar_pncp_licitacoes.csv"}
     )
@@ -753,6 +687,3 @@ if __name__ == '__main__':
     # O debug=True também deve ser False ou controlado por uma variável de ambiente em produção.
     is_debug_mode = os.getenv('FLASK_DEBUG', '0') == '1'
     app.run(debug=is_debug_mode, host='0.0.0.0', port=port) # Modo debug esta configurado no arquivo .env
-
-# --- venv/scripts/activate
-# --- python app.py

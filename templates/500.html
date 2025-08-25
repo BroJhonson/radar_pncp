@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% set body_class = 'page-error' %} <!-- Mantendo a mesma classe para estilização, se houver -->
+
+{% block title %}{{ page_title | default('Erro Interno no Servidor') }} - RADAR PNCP{% endblock %}
+
+{% block content %}
+<div class="container py-5 text-center">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <h1 class="display-1 text-danger">500</h1>
+            <h2 class="mb-3">Oops! Algo deu errado.</h2>
+            <p class="lead mb-4">
+                Pedimos desculpas, mas ocorreu um erro inesperado em nossos servidores. 
+                Nossa equipe já foi notificada e está trabalhando para corrigir o problema.
+            </p>
+            <p>Por favor, tente novamente mais tarde. Se o problema persistir, você pode <a href="{{ url_for('pagina_contato') }}">entrar em contato conosco</a>.</p>
+            <a href="{{ url_for('inicio') }}" class="btn btn-primary mt-4">
+                <i class="bi bi-house-door-fill"></i> Voltar para a Página Inicial
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -44,7 +44,7 @@ def main():
         modalidadeNome TEXT,
         modoDisputaId INTEGER,
         modoDisputaNome TEXT,
-        situacaoCompraId INTEGER, 
+        situacaoCompraId INTEGER, -- (Apenas 1 para ativas inicialmente)
         situacaoCompraNome TEXT,
         objetoCompra TEXT,
         informacaoComplementar TEXT,
@@ -82,16 +82,17 @@ def main():
     sql_create_itens_licitacao_table = """
     CREATE TABLE IF NOT EXISTS itens_licitacao (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        licitacao_id INTEGER NOT NULL,                          
+        licitacao_id INTEGER NOT NULL,                          -- FK para licitacoes.id
         numeroItem INTEGER,
         descricao TEXT,                                         
         materialOuServicoNome TEXT,                             
-        quantidade REAL,                                        
+        quantidade REAL,                                        -- RENOMEADO (era quantidadeEstimada)
         unidadeMedida TEXT,                                     
-        valorUnitarioEstimado REAL,                             
+        valorUnitarioEstimado REAL,                             -- RENOMEADO (era valorUnitario)
         valorTotal REAL,                                        
         orcamentoSigiloso BOOLEAN,                              
-        itemCategoriaNome TEXT,                                                               
+        itemCategoriaNome TEXT,                                 -- RENOMEADO (era categoriaItemNome)
+        categoriaItemCatalogo TEXT,                       
         criterioJulgamentoNome TEXT,                            
         situacaoCompraItemNome TEXT,                            
         tipoBeneficioNome TEXT,                                 
@@ -103,7 +104,10 @@ def main():
         FOREIGN KEY (licitacao_id) REFERENCES licitacoes (id) ON DELETE CASCADE
     );
     """
-    
+    # Manter índice em licitacao_id
+    sql_create_index_itens_licitacao_id = "CREATE INDEX IF NOT EXISTS idx_itens_licitacao_licitacao_id ON itens_licitacao (licitacao_id);"
+
+
     #Criar tabela de "ARQUIVOS" arquivos_licitacoes
     sql_create_arquivos_licitacao_table = """
     CREATE TABLE IF NOT EXISTS arquivos_licitacao (
@@ -118,22 +122,23 @@ def main():
     );
     """
 
-    # SQL para criar índices
+    sql_create_index_arquivos_licitacao_id = "CREATE INDEX IF NOT EXISTS idx_arquivos_licitacao_licitacao_id ON arquivos_licitacao (licitacao_id);"
+    # O índice em link_arquivo é criado automaticamente por ser UNIQUE.
+
+
+
+    # SQL para criar índices na tabela 'licitacoes'
+    # (Índice em numeroControlePNCP é criado automaticamente por ser UNIQUE, mas podemos ser explícitos)
+    # (Na verdade, UNIQUE já cria um índice, então criar outro explicitamente não é necessário e pode ser redundante, mas alguns DBs otimizam, outros podem dar erro. SQLite geralmente lida bem.)
+    # (Vou omitir a criação explícita do índice para numeroControlePNCP já que é UNIQUE)
     sql_create_index_licitacoes_situacao = "CREATE INDEX IF NOT EXISTS idx_licitacoes_situacao_compra_id ON licitacoes (situacaoCompraId);"
     sql_create_index_licitacoes_uf = "CREATE INDEX IF NOT EXISTS idx_licitacoes_unidade_orgao_uf_sigla ON licitacoes (unidadeOrgaoUfSigla);"
     sql_create_index_licitacoes_data_abertura = "CREATE INDEX IF NOT EXISTS idx_licitacoes_data_abertura_proposta ON licitacoes (dataAberturaProposta);"
     sql_create_index_licitacoes_data_atualizacao = "CREATE INDEX IF NOT EXISTS idx_licitacoes_data_atualizacao ON licitacoes (dataAtualizacao);"
     sql_create_index_licitacoes_cnpj_orgao = "CREATE INDEX IF NOT EXISTS idx_licitacoes_orgao_entidade_cnpj ON licitacoes (orgaoEntidadeCnpj);"
+
+    # SQL para criar índice na tabela 'itens_licitacao'
     sql_create_index_itens_licitacao_id = "CREATE INDEX IF NOT EXISTS idx_itens_licitacao_licitacao_id ON itens_licitacao (licitacao_id);"
-    sql_create_index_arquivos_licitacao_id = "CREATE INDEX IF NOT EXISTS idx_arquivos_licitacao_licitacao_id ON arquivos_licitacao (licitacao_id);"
-
-    # Novos índices sugeridos pelas instruções
-    sql_create_index_licitacoes_situacao_real = "CREATE INDEX IF NOT EXISTS idx_licitacoes_situacao_real ON licitacoes (situacaoReal);"
-    sql_create_index_licitacoes_data_publicacao = "CREATE INDEX IF NOT EXISTS idx_licitacoes_data_publicacao ON licitacoes (dataPublicacaoPncp DESC);"
-    sql_create_index_licitacoes_modalidade = "CREATE INDEX IF NOT EXISTS idx_licitacoes_modalidade ON licitacoes (modalidadeNome);"
-    sql_create_index_licitacoes_valor = "CREATE INDEX IF NOT EXISTS idx_licitacoes_valor ON licitacoes (valorTotalEstimado);"
-    sql_create_index_licitacoes_situacao_data = "CREATE INDEX IF NOT EXISTS idx_licitacoes_situacao_data ON licitacoes (situacaoReal, dataPublicacaoPncp DESC);"
-
 
     # Cria a conexão com o banco de dados
     conn = create_connection(DATABASE_PATH) # (Chama a função para conectar/criar o banco)
@@ -161,13 +166,6 @@ def main():
 
         print("Criando índices para 'arquivos_licitacao'...")
         create_table(conn, sql_create_index_arquivos_licitacao_id) # Cria índice em licitacao_id
-
-        print("Criando índices adicionais para otimizar consultas...")
-        create_table(conn, sql_create_index_licitacoes_situacao_real)
-        create_table(conn, sql_create_index_licitacoes_data_publicacao)
-        create_table(conn, sql_create_index_licitacoes_modalidade)
-        create_table(conn, sql_create_index_licitacoes_valor)
-        create_table(conn, sql_create_index_licitacoes_situacao_data)
 
         conn.commit() # (Salva (commit) as alterações no banco de dados)
         conn.close() # (Fecha a conexão com o banco de dados)

@@ -1,108 +1,92 @@
-# Radar PNCP - Ferramenta de Busca de Licitações
+# RADAR PNCP - Um Buscador Avançado para Licitações Públicas
 
-## Visão Geral
+![RADAR PNCP Screenshot](\static\images\preview-radar.png) 
+<!-- TODO: Substitua pelo caminho de uma boa screenshot da sua aplicação -->
 
-O Radar PNCP é uma aplicação web desenvolvida em Flask (Python) que atua como uma interface amigável e poderosa para o Portal Nacional de Contratações Públicas (PNCP). O objetivo principal é facilitar a busca, filtragem e acompanhamento de licitações públicas, oferecendo uma experiência de usuário superior à do portal oficial.
+O **RADAR PNCP** é uma aplicação web completa, desenvolvida com Flask (Python) e JavaScript moderno, que funciona como uma interface amigável e poderosa para o Portal Nacional de Contratações Públicas (PNCP) do Brasil. O objetivo principal é simplificar e agilizar a busca, filtragem e acompanhamento de licitações públicas, oferecendo uma experiência de usuário superior à do portal oficial.
 
-A aplicação é gratuita e de acesso público, com funcionalidades como filtros avançados, salvamento de licitações favoritas (usando `localStorage`) e um blog informativo.
-
----
-
-## Estrutura do Projeto
-
-O projeto segue uma estrutura padrão para aplicações Flask, separando lógica, templates e arquivos estáticos.
-
-/frontend/
-|
-├── static/
-| ├── css/
-| | └── style.css # Folha de estilo principal
-| ├── js/
-| | └── main.js # Lógica JavaScript do frontend
-| └── images/
-| └── ... # Imagens, logos e ícones
-|
-├── templates/
-| ├── base.html # Template base com header e footer
-| ├── index.html # Homepage do projeto
-| ├── radar.html # Página principal da ferramenta de busca
-| ├── pagina_blog.html # Página de listagem dos artigos do blog
-| ├── pagina_post_individual.html # Template para um único post
-| ├── pagina_contato.html # Página com formulário de contato
-| ├── pagina_politica_privacidade.html # Política de Privacidade
-| ├── pagina_politica_cookies.html # Política de Cookies
-| └── 404.html # Página de erro 404
-|
-└── app.py # Arquivo principal da aplicação Flask
-
+A aplicação utiliza um banco de dados local (SQLite) que é populado e sincronizado periodicamente através de um script que consome a API do PNCP, garantindo buscas rápidas e performáticas sem depender de chamadas diretas à API oficial em tempo real.
 
 ---
 
-## Tecnologias Utilizadas
+## ✨ Funcionalidades Principais
 
-*   **Backend:** Python com o micro-framework Flask.
-*   **Frontend:** HTML5, CSS3, JavaScript (Vanilla JS).
-*   **Framework CSS:** Bootstrap 5 para layout responsivo e componentes base.
-*   **Templates:** Jinja2 (integrado ao Flask).
-*   **Bibliotecas JS:** AOS (Animate On Scroll) para animações de rolagem.
-
----
-
-## Principais Funcionalidades Implementadas
-
-### Frontend (JavaScript - `main.js`)
-
-*   **Lógica de Página Específica:** O `main.js` utiliza a classe do `<body>` (ex: `.page-home`, `.page-busca-licitacoes`) para executar scripts apenas nas páginas relevantes.
-*   **Busca de Licitações (`radar.html`):**
-    *   Comunicação via `fetch` com uma API interna (`/api/frontend/licitacoes`) para buscar dados.
-    *   Renderização dinâmica da tabela de resultados e da paginação.
-    *   Manipulação de múltiplos filtros (palavras-chave, datas, UFs, modalidades, status).
-    *   Seleção de linha na tabela para melhor feedback visual.
-*   **Sistema de Favoritos:**
-    *   Utiliza o `localStorage` do navegador para persistir os dados.
-    *   Funções para adicionar, remover e verificar favoritos.
-    *   Sincronização da UI (botões e listas) em tempo real.
-*   **Responsividade Dinâmica:**
-    *   O acordeão horizontal da homepage se transforma em vertical no mobile.
-    *   A tabela de licitações se transforma em uma lista de "cards" no mobile para melhor legibilidade.
-*   **Banner de Cookies:** Gerencia o consentimento do usuário, salvando a preferência no `localStorage` para não exibir o banner novamente.
-
-### Estilização (CSS - `style.css`)
-
-*   **Design Responsivo (Mobile-First approach):** Uso intensivo de Media Queries para adaptar o layout do desktop para tablets e celulares.
-*   **Componentes Customizados:** Estilos para acordeão horizontal, botões flutuantes, cards de blog, e painéis laterais (offcanvas).
-*   **Microinterações:** Efeitos de `hover`, transições suaves e animações para criar uma experiência de usuário mais rica.
-*   **Isolamento de Estilos:** Uso de classes no `<body>` para aplicar estilos específicos por página, evitando conflitos.
+*   **Busca Avançada por Palavras-Chave:** Filtre licitações usando múltiplos termos de inclusão (requer que **todos** os termos estejam presentes) e exclusão.
+*   **Filtros Abrangentes:** Refine sua busca por Status, Modalidade, Estado (UF), Município, Faixa de Valor e Período de Publicação/Atualização.
+*   **Interface Reativa:** Tabela de resultados com paginação, ordenação e atualização dinâmica sem a necessidade de recarregar a página.
+*   **Painel de Detalhes Integrado:** Visualize todos os detalhes de uma licitação, incluindo seus itens e arquivos para download, em um painel lateral (Offcanvas) sem sair da tela de busca.
+*   **Sistema de Favoritos:** Salve licitações de interesse para fácil acesso posterior (utilizando o `localStorage` do navegador).
+*   **Exportação para CSV:** Exporte os resultados da sua busca atual para uma planilha com um único clique.
+*   **Sincronização de Dados:** Um script de backend robusto (`sync_api.py`) mantém o banco de dados local atualizado com as últimas licitações do PNCP.
+*   **Páginas de Conteúdo:** Seções de Blog e um formulário de Contato funcional para feedback dos usuários.
+*   **Design Responsivo:** Interface otimizada para desktop, tablets e dispositivos móveis.
 
 ---
 
-## Como Executar o Projeto Localmente
+## 🛠️ Tecnologias Utilizadas
 
-1.  **Pré-requisitos:** Certifique-se de ter o Python 3 instalado.
-2.  **Clone o repositório:**
-    ```bash
-    git clone [URL_DO_SEU_REPOSITORIO]
-    cd [NOME_DA_PASTA]
-    ```
-3.  **Crie e ative um ambiente virtual:**
-    ```bash
-    # Windows
-    python -m venv venv
-    .\venv\Scripts\activate
+**Backend:**
+*   **Python 3**
+*   **Flask:** Microframework para a aplicação web e API.
+*   **SQLite 3:** Banco de dados relacional embarcado.
+*   **Requests:** Para consumir a API do PNCP.
+*   **Tenacity:** Para retentativas robustas em chamadas de API.
+*   **python-dotenv:** Para gerenciamento de variáveis de ambiente.
 
-    # macOS/Linux
-    python3 -m venv venv
-    source venv/bin/activate
+**Frontend:**
+*   **HTML5** e **SCSS (Sass)**
+*   **JavaScript (ES6+ Modules):** Lógica da interface do usuário.
+*   **Bootstrap 5:** Framework para componentes e layout responsivo.
+*   **Node.js / npm:** Para gerenciamento de pacotes e scripts de build.
+*   **esbuild:** Bundler JavaScript para compilar o código do frontend.
+
+**Ambiente de Desenvolvimento:**
+*   **concurrently:** Para executar os processos de backend e frontend simultaneamente.
+*   **nodemon:** Para recarregar o servidor Flask automaticamente durante o desenvolvimento.
+
+---
+
+## ⚠️ Observação sobre Bancos de Dados e Palavras-Chave
+
+Atualmente o **RADAR PNCP** utiliza **SQLite** como banco local.  
+O SQLite **não possui suporte nativo** para buscas *case-insensitive* e *accent-insensitive* (ex.: `"Ação"` ≈ `"acao"`).  
+Por isso, no código (`_build_licitacoes_query`) essa responsabilidade está no **Python**, através da função `remove_acentos`.
+
+Se você quiser usar outro banco de dados, será necessário **adaptar esse trecho**:
+
+- **MariaDB / MySQL**  
+  - Suporte nativo a *case* e *accent-insensitive* via **collations**.  
+  - Exemplo: `utf8mb4_0900_ai_ci` já ignora acentos e diferenciação de maiúsculas/minúsculas.  
+  - Assim, você pode remover o `remove_acentos` do Python e delegar ao banco:
+    ```sql
+    WHERE objetoCompra LIKE '%acao%' COLLATE utf8mb4_0900_ai_ci
     ```
-4.  **Instale as dependências:**
-    ```bash
-    pip install -r requirements.txt 
-    # (Lembre-se de criar um arquivo requirements.txt com 'pip freeze > requirements.txt')
+
+- **PostgreSQL**  
+  - Possui a extensão [`unaccent`](https://www.postgresql.org/docs/current/unaccent.html) para tratar acentos.  
+  - Combine com `LOWER()` para case-insensitive:
+    ```sql
+    WHERE unaccent(LOWER(objetoCompra)) LIKE unaccent(LOWER('%acao%'))
     ```
-5.  **Execute a aplicação:**
-    ```bash
-    flask run
-    # ou
-    python app.py
-    ```
-6.  Abra o navegador e acesse `http://127.0.0.1:5000`.
+  - Opcionalmente, use o tipo `citext` para colunas *case-insensitive*.
+
+- **SQLite (padrão atual)**  
+  - Continua necessário o uso do Python para normalizar as palavras-chave com `remove_acentos` antes da comparação.
+
+👉 Portanto, se trocar o banco, **não esqueça de ajustar essa parte do código de busca**.
+
+---
+
+## 🚀 Como Executar o Projeto Localmente
+
+Siga os passos abaixo para configurar e executar o RADAR PNCP em sua máquina.
+
+### Pré-requisitos
+*   [Git](https://git-scm.com/)
+*   [Python 3.8+](https://www.python.org/) e `pip`
+*   [Node.js e npm](https://nodejs.org/)
+
+### 1. Clonar o Repositório
+```bash
+git clone https://github.com/BroJhonson/plataforma-licitacoes.git
+cd plataforma-licitacoes

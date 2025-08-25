@@ -1,0 +1,26 @@
+// scss/components/_footer.scss
+
+.site-footer {
+    background-color: $color-gray-footer;
+    color: $light;
+    padding: 0.2rem 0;
+    font-size: 0.65em;
+    text-align: center;
+    margin-top: auto;
+
+    p,
+    .nav {
+        margin-bottom: 0;
+        line-height: 1.2;
+    }
+
+    .nav-link {
+        color: $secondary;
+        padding: 0.5rem 0.5rem;
+        transition: color 0.2s ease;
+
+        &:hover {
+            color: $color-white;
+        }
+    }
+}

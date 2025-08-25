@@ -40,10 +40,6 @@ def cleanup_licitacoes_antigas():
         if deleted_count > 0: # Só executa VACUUM se algo foi deletado
             print("LIMPEZA: Otimizando o banco de dados (VACUUM)...")
             cursor.execute("VACUUM;")
-            # Agora vamos atualizar as estatísticas do banco de dados
-            # Isso é importante para que o SQLite saiba que os dados foram alterados
-            print("LIMPEZA: Atualizando estatísticas do banco de dados (ANALYZE)...")
-            cursor.execute("ANALYZE;")
             conn.commit() # VACUUM precisa de seu próprio commit em algumas configurações/versões
             print("LIMPEZA: Otimização concluída.")
         else:
