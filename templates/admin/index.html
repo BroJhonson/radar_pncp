@@ -1,0 +1,54 @@
+{% extends 'admin/master.html' %}
+{% block body %}
+<div class="container-fluid">
+    <h1>Painel Administrativo</h1>
+    <p>Bem-vindo {{ current_user.username }}!</p>
+
+    <div class="row">
+        <div class="col-md-4">
+            <div class="card text-white bg-primary mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">{{ stats.total_posts }}</h5>
+                    <p class="card-text">Posts Publicados</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card text-white bg-success mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">{{ stats.total_categorias }}</h5>
+                    <p class="card-text">Categorias</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card text-white bg-info mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">{{ stats.total_tags }}</h5>
+                    <p class="card-text">Tags</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <h3>Posts Recentes</h3>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Título</th>
+                <th>Data</th>
+                <th>Ações</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for post in posts_recentes %}
+            <tr>
+                <td>{{ post.titulo }}</td>
+                <td>{{ post.data_publicacao.strftime('%d/%m/%Y') }}</td>
+                <td><a href="{{ url_for('posts.edit_post', post_id=post.id) }}" class="btn btn-xs btn-secondary">Editar</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

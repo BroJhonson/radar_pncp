@@ -116,45 +116,31 @@
         </div>
     </div>
 </section>
-
+<!--============================ MODIFICAR ===================================-->
 <!-- 4. Seção dos artigos -->
 <section class="blog-destaques py-5" data-aos="fade-up">
     <div class="container">
-        <h2 class="text-center fw-bold mb-5">Últimos artigos do blog</h2>
+        <h2 class="text-center fw-bold mb-5">Aproveite e confira nossos artigos em destaque!</h2>
         <div class="row g-4">
-            <!-- Artigo 1 -->
+            {% for post in posts %}
             <div class="col-md-4">
                 <div class="card blog-card h-100">
-                    <img src="{{ url_for('static', filename='images/artigo1.jpg') }}" class="card-img-top" alt="Imagem do artigo 1">
+                    <!-- Lógica para imagem de destaque (local vs. externa) -->
+                    {% if post.imagem_destaque %}
+                        {% if post.imagem_destaque.startswith('http') %}
+                            <img src="{{ post.imagem_destaque }}" class="card-img-top" alt="{{ post.titulo }}">
+                        {% else %}
+                            <img src="{{ url_for('static', filename='images/' + post.imagem_destaque) }}" class="card-img-top" alt="{{ post.titulo }}">
+                        {% endif %}
+                    {% endif %}
                     <div class="card-body">
-                        <h3 class="card-title fs-5">Como Encontrar Licitações por Palavra-chave</h3>
-                        <p class="card-text">Use filtros estratégicos para encontrar licitações perfeitas para o seu negócio.</p>
-                        <a href="{{ url_for('pagina_post_blog', post_slug='como-encontrar-licitacoes-por-palavra-chave') }}" class="btn btn-outline-primary">Ler mais</a>
+                        <h5 class="card-title">{{ post.titulo }}</h5>
+                        <p class="card-text">{{ post.resumo }}</p>
+                        <a href="{{ url_for('pagina_post_blog', post_slug=post.slug) }}" class="btn btn-outline-primary">Ler mais</a>
                     </div>
                 </div>
             </div>
-            <!-- Artigo 2 -->
-            <div class="col-md-4">
-                <div class="card blog-card h-100">
-                    <img src="{{ url_for('static', filename='images/artigo2.jpg') }}" class="card-img-top" alt="Imagem do artigo 2">
-                    <div class="card-body">
-                        <h3 class="card-title fs-5">Nova Lei de Licitações</h3>
-                        <p class="card-text">Entenda o impacto da nova legislação e como se adaptar para aproveitar as mudanças.</p>
-                        <a href="{{ url_for('pagina_post_blog', post_slug='nova-lei-de-licitacoes-o-que-voce-precisa-saber') }}" class="btn btn-outline-primary">Ler mais</a>
-                    </div>
-                </div>
-            </div>
-            <!-- Artigo 3 -->
-            <div class="col-md-4">
-                <div class="card blog-card h-100">
-                    <img src="{{ url_for('static', filename='images/artigo3.jpg') }}" class="card-img-top" alt="Imagem do artigo 3">
-                    <div class="card-body">
-                        <h3 class="card-title fs-5">Erros Comuns em Propostas</h3>
-                        <p class="card-text">Evite armadilhas que podem desclassificar sua empresa nas licitações públicas.</p>
-                        <a href="{{ url_for('pagina_post_blog', post_slug='erros-comuns-em-propostas-de-licitacao') }}" class="btn btn-outline-primary">Ler mais</a>
-                    </div>
-                </div>
-            </div>
+            {% endfor %}
         </div>
     </div>
 </section>

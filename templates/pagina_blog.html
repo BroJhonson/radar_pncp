@@ -1,52 +1,52 @@
 {% extends "base.html" %}
-{% set body_class = 'page-blog' %} 
-
 {% block title %}{{ page_title }} - RADAR PNCP{% endblock %}
 
 {% block content %}
 <div class="container py-4">
-    <div class="row justify-content-center">
-        <div class="col-md-10 col-lg-8"> 
-            <header class="mb-5 text-center">
+    <div class="row g-5">
+        <div class="col-lg-8">
+            <header class="mb-5">
                 <h1 class="display-5 fw-bold">{{ page_title }}</h1>
                 <p class="lead text-muted">Artigos, notícias e dicas sobre o universo das licitações públicas.</p>
             </header>
-
+            
             {% if posts %}
                 {% for post in posts %}
-                <!-- Cada artigo é um 'article' -->
-                <article class="blog-post-summary mb-5 pb-5 border-bottom position-relative">
-                    <div class="row g-0">
-                        <!-- Coluna da Imagem -->
-                        <div class="col-md-4 mb-3 mb-md-0">
-                            {% if post.imagem_destaque %}
-                                <a href="{{ url_for('pagina_post_blog', post_slug=post.slug) }}">
-                                    <!-- CORREÇÃO AQUI: Caminho da imagem corrigido -->
-                                    <img src="{{ url_for('static', filename='images/' + post.imagem_destaque) }}" alt="{{ post.titulo }}" class="img-fluid rounded blog-list-image">
-                                </a>
-                            {% endif %}
+                    <article class="blog-post-summary mb-5 pb-5 border-bottom position-relative">
+                        <div class="row g-0">
+                            <div class="col-md-4 mb-3 mb-md-0">
+                                {% if post.imagem_destaque %}
+                                    <a href="{{ url_for('pagina_post_blog', post_slug=post.slug) }}">
+                                        {% if post.imagem_destaque.startswith('http') %}
+                                            {# Se o campo começar com http, é uma URL externa. Use-a diretamente. #}
+                                            <img src="{{ post.imagem_destaque }}" alt="{{ post.titulo }}" class="img-fluid rounded blog-list-image">
+                                        {% else %}
+                                            {# Caso contrário, é um nome de arquivo local. Use url_for. #}
+                                            <img src="{{ url_for('static', filename='images/' + post.imagem_destaque) }}" alt="{{ post.titulo }}" class="img-fluid rounded blog-list-image">
+                                        {% endif %}
+                                    </a>
+                                {% endif %}
+                            </div>
+                            <div class="col-md-8 ps-md-4">
+                                <h2 class="h4 blog-post-title mb-1">
+                                    <a href="{{ url_for('pagina_post_blog', post_slug=post.slug) }}" class="text-decoration-none link-dark stretched-link">{{ post.titulo }}</a>
+                                </h2>
+                                <p class="blog-post-meta text-muted mb-2">
+                                    <small><i class="bi bi-calendar3"></i> Publicado em: {{ post.data_publicacao.strftime('%d/%m/%Y') }}</small>
+                                </p>
+                                <p class="card-text">{{ post.resumo }}</p>
+                            </div>
                         </div>
-                        <!-- Coluna do Texto -->
-                        <div class="col-md-8 ps-md-4">
-                            <h2 class="h4 blog-post-title mb-1">
-                                <!-- O stretched-link faz todo o card ser clicável -->
-                                <a href="{{ url_for('pagina_post_blog', post_slug=post.slug) }}" class="text-decoration-none link-dark stretched-link">{{ post.titulo }}</a>
-                            </h2>
-                            <p class="blog-post-meta text-muted mb-2">
-                                <small><i class="bi bi-calendar3"></i> Publicado em: {{ post.data }}</small>
-                            </p>
-                            <p class="card-text">{{ post.resumo }}</p>
-                        </div>
-                    </div>
-                </article>
+                    </article>
                 {% endfor %}
             {% else %}
                 <div class="alert alert-info text-center" role="alert">
                     Nenhum post encontrado no momento. Volte em breve!
                 </div>
             {% endif %}
-
         </div>
+
+        {% include '_blog_sidebar.html' %}
     </div>
 </div>
 {% endblock %}

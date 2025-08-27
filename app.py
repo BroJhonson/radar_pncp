@@ -1,5 +1,10 @@
 import mysql.connector 
 from mysql.connector import errors # Para tratamento de erros
+# Importações para usuarios e admin
+from flask_admin import Admin, BaseView, expose, AdminIndexView
+from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
+from flask_bcrypt import Bcrypt
+from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 import requests  # Para chamar a API do IBGE
 from markupsafe import Markup, escape
@@ -14,11 +19,19 @@ from flask import Response
 import unicodedata  # Para normalizar strings (remover acentos, etc.)
 import time
 import datetime
+import bleach
 
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 
 # --- Configurações ---
 app = Flask(__name__)
+# Configurações de segurança e login
+bcrypt = Bcrypt(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login' # Redireciona para a rota 'login' se não estiver logado
+login_manager.login_message = "Por favor, faça login para acessar esta página."
+login_manager.login_message_category = "info"
+# Chave secreta para sessões e flash messages
 app.secret_key = os.getenv('FLASK_SECRET_KEY')
 if not app.secret_key:    
     message = "ERRO CRÍTICO DE CONFIGURAÇÃO: A variável de ambiente FLASK_SECRET_KEY não está definida. A aplicação não pode iniciar de forma segura."
@@ -27,12 +40,43 @@ if not app.secret_key:
     import sys
     sys.stderr.write(message + "\n")
     raise ValueError(message) # Impede que a aplicação continue sem a chave.
-
 # Se chegou até aqui, a app.secret_key foi carregada com sucesso.
 app.logger.info("FLASK_SECRET_KEY carregada com sucesso do ambiente.")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # Acho que isso não é mais necessário
+DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')   # nem isso
+
+# BLOCO DE CÓDIGO 1: CONFIGURAÇÃO DO USUÁRIO PARA FLASK-LOGIN
+class User(UserMixin):
+    def __init__(self, id, username, password_hash):
+        self.id = id
+        self.username = username
+        self.password_hash = password_hash
+
+@login_manager.user_loader
+def load_user(user_id):
+    """Carrega um usuário do banco de dados com base no ID da sessão."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return None
+        
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM usuarios WHERE id = %s", (user_id,))
+        user_data = cursor.fetchone()
+        
+        if user_data:
+            return User(id=user_data['id'], username=user_data['username'], password_hash=user_data['password_hash'])
+        return None
+    except mysql.connector.Error as err:
+        app.logger.error(f"Erro ao carregar usuário: {err}")
+        return None
+    finally:
+        if conn and conn.is_connected():
+            if 'cursor' in locals():
+                cursor.close()
+            conn.close()
 
 # --- Função Auxiliares e de Conecção para o Banco de Dados ---
 def get_db_connection(max_retries=3, delay=2):
@@ -93,8 +137,7 @@ app.jinja_env.filters['nl2br'] = nl2br_filter  # Registra o filtro
 
 # --- Rota erro 404
 @app.errorhandler(404)
-def pagina_nao_encontrada(e):
-    # Você pode logar o erro 'e' aqui se quiser
+def pagina_nao_encontrada(e):    
     print(f"Erro 404 - Página não encontrada: {request.url} (Erro original: {e})")
     return render_template('404.html', 
                            page_title="Página Não Encontrada", 
@@ -104,114 +147,246 @@ def pagina_nao_encontrada(e):
 def erro_interno_servidor_erro(e):
     # Em um ambiente de produção, NUNCA deve vazar detalhes do erro 'e' para o usuário.
     # O template 500.html deve ter uma mensagem genérica.
-    print(f"Erro 500 detectado: {e} para a URL: {request.url}") # Para debug local
+    print(f"Erro 500 detectado: {e} para a URL: {request.url}") # Para debug local MUDAR ISSO DEPOIS EM PREDUÇÃO ++++++++++++++++++++++++++++++++++++
     return render_template('500.html', 
-                           page_title="Erro Interno no Servidor", 
+                           page_title="Erro Interno no Servidor", # ALIAS PARECE QUE JA ESTÁ RESOLVIDO
                            body_class="page-error"), 500
 
+# =========================================================================
+# ROTAS DE AUTENTICAÇÃO E ADMINISTRAÇÃO de USUÁRIOS
+# =========================================================================
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('admin.index'))
+    
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        conn = None
+        
+        try:
+            conn = get_db_connection()
+            if not conn:
+                flash("Erro de conexão com o banco de dados. Tente novamente mais tarde.", "danger")
+                return render_template('login.html', page_title="Login")
+            
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM usuarios WHERE username = %s", (username,))
+            user_data = cursor.fetchone()
 
-# --- Dados de exemplo para o blog ---
-posts_blog_exemplo = [
-    {
-        "id": 1,
-        "slug": "como-encontrar-licitacoes-por-palavra-chave",
-        "titulo": "Como Encontrar Licitações por Palavra-chave",
-        "data": "06/06/2024",
-        "resumo": "Aprenda a usar filtros estratégicos para encontrar licitações perfeitas para o seu negócio.",
-        "imagem_destaque": "artigo1.jpg",
-        "conteudo_completo": """<h2>Entendendo a Busca por Palavra-Chave</h2>
-            <p>A busca por palavra-chave é uma das ferramentas mais poderosas ao procurar licitações. 
-            No entanto, para ser eficaz, é preciso estratégia...</p>
-            <p>Imagine que você vende 'equipamentos de informática'. Digitar apenas 'informática' pode trazer
-            milhares de resultados, incluindo serviços de manutenção que não são seu foco.</p>
-            <h3>Dicas para Otimizar sua Busca:</h3>
-            <ul>
-                <li><strong>Seja Específico:</strong> Em vez de "material", tente "material de escritório" ou "material de construção".</li>
-                <li><strong>Use Múltiplas Palavras (com vírgula no Radar PNCP):</strong> "consultoria ambiental, licenciamento" para encontrar ambos.</li>
-                <li><strong>Pense em Sinônimos:</strong> Se você oferece "treinamento", tente também "capacitação", "curso".</li>
-                <li><strong>Utilize Palavras de Exclusão:</strong> Se você vende produtos novos, pode querer excluir termos como "usado" ou "reparo".</li>
-            </ul>
-            <p>No nosso sistema Radar PNCP, a interface de tags para palavras-chave (que estamos desenvolvendo!) 
-            facilitará ainda mais esse processo, permitindo adicionar e remover termos de forma visual e intuitiva.</p>
-            <p>Lembre-se também de combinar o filtro de palavras-chave com outros filtros como UF, modalidade e status 
-            para refinar ainda mais seus resultados e encontrar as oportunidades que realmente importam para o seu negócio.</p>
-        """
-    },
-    {
-        "id": 2,
-        "slug": "nova-lei-de-licitacoes-o-que-voce-precisa-saber",
-        "titulo": "Nova Lei de Licitações: O Que Você Precisa Saber",
-        "data": "07/06/2024",
-        "resumo": "Entenda o impacto da nova legislação e como se adaptar a tempo para aproveitar as mudanças.",
-        "imagem_destaque": "artigo2.jpg",
-        "conteudo_completo": """<h2>Principais Mudanças da Lei 14.133/2021</h2>
-            <p>A Nova Lei de Licitações e Contratos Administrativos (Lei nº 14.133/2021) trouxe modernização e 
-            novos paradigmas para as compras públicas no Brasil...</p>
-            <p>Alguns pontos de destaque incluem:</p>
-            <ul>
-                <li><strong>Novas Modalidades:</strong> Como o diálogo competitivo.</li>
-                <li><strong>Portal Nacional de Contratações Públicas (PNCP):</strong> Centralização das informações.</li>
-                <li><strong>Foco no Planejamento:</strong> Ênfase na fase preparatória das licitações.</li>
-                <li><strong>Critérios de Julgamento:</strong> Além do menor preço, o maior desconto, melhor técnica ou conteúdo artístico, etc.</li>
-            </ul>
-            <p>Adaptar-se a essa nova realidade é fundamental. Isso inclui revisar processos internos, capacitar equipes
-            e entender os novos instrumentos como o Estudo Técnico Preliminar (ETP) e o Termo de Referência.</p>
-        """
-    },
-    {
-        "id": 3,
-        "slug": "erros-comuns-em-propostas-de-licitacao",
-        "titulo": "Erros Comuns em Propostas de Licitação e Como Evitá-los",
-        "data": "08/06/2024",
-        "resumo": "Evite armadilhas que podem desclassificar sua empresa nas licitações públicas.",
-        "imagem_destaque": "artigo3.jpg",
-        "conteudo_completo": """<h2>Não Deixe que Pequenos Erros Custem Grandes Oportunidades</h2>
-            <p>Participar de licitações pode ser um processo complexo, e pequenos descuidos na elaboração da proposta
-            podem levar à desclassificação. Conhecer os erros mais comuns é o primeiro passo para evitá-los.</p>
-            <h3>Principais Armadilhas:</h3>
-            <ol>
-                <li><strong>Documentação Incompleta ou Vencida:</strong> Certidões negativas, balanços, atestados de capacidade técnica. Tudo deve estar rigorosamente em dia e conforme solicitado no edital.</li>
-                <li><strong>Não Atender às Especificações Técnicas:</strong> O produto ou serviço ofertado deve corresponder exatamente ao que foi descrito no Termo de Referência ou Projeto Básico. Qualquer desvio pode ser motivo para desclassificação.</li>
-                <li><strong>Erros na Planilha de Preços:</strong> Cálculos incorretos, omissão de custos, ou preços inexequíveis (muito baixos) ou excessivos.</li>
-                <li><strong>Perda de Prazos:</strong> Tanto para envio de propostas quanto para recursos ou envio de documentação complementar.</li>
-                <li><strong>Assinaturas Ausentes ou Inválidas:</strong> Propostas e declarações devem ser devidamente assinadas por quem tem poderes para tal.</li>
-            </ol>
-            <p>A atenção aos detalhes, uma leitura minuciosa do edital e um bom planejamento são seus maiores aliados para evitar esses erros e aumentar suas chances de sucesso.</p>
-        """
-    }
-]
+            if user_data and bcrypt.check_password_hash(user_data['password_hash'], password):
+                user = User(id=user_data['id'], username=user_data['username'], password_hash=user_data['password_hash'])
+                login_user(user)
+                # Redireciona para o painel de admin após o login
+                return redirect(url_for('admin.index'))
+            else:
+                flash('Login inválido. Verifique o usuário e a senha.', 'danger')
+
+        except mysql.connector.Error as err:
+            app.logger.error(f"Erro de banco de dados no login: {err}")
+            flash("Ocorreu um erro inesperado. Tente novamente.", "danger")
+        finally:
+            if conn and conn.is_connected():
+                if 'cursor' in locals():
+                    cursor.close()
+                conn.close()
+            
+    return render_template('login.html', page_title="Login")
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    flash('Você foi desconectado com sucesso.', 'info')
+    return redirect(url_for('login'))
+# =========================================================================
 
 # --- Rotas Frontend (Renderização de Páginas) ---
 @app.route('/')
 def inicio():
-    return render_template('index.html', page_title="Bem-vindo ao RADAR PNCP", body_class="page-home")
+    # Busca apenas os 3 posts marcados como destaque
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT * FROM posts WHERE is_featured = TRUE ORDER BY data_publicacao DESC LIMIT 3")
+    posts_destacados = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return render_template('index.html', 
+                           posts=posts_destacados, 
+                           page_title="Bem-vindo ao RADAR PNCP", 
+                           body_class="page-home")
 
 @app.route('/radarPNCP')
 def buscador_licitacoes():
     return render_template('radar.html', page_title="Buscar Licitações - RADAR PNCP", body_class="page-busca-licitacoes")
 
+def get_blog_sidebar_data(cursor):
+    """Função auxiliar para buscar dados comuns da sidebar do blog."""
+    cursor.execute("SELECT nome, slug FROM categorias ORDER BY nome")
+    categorias = cursor.fetchall()
+    
+    # Busca todas as tags
+    cursor.execute("SELECT nome FROM tags ORDER BY nome")
+    tags = cursor.fetchall()
+    return categorias, tags
+
 @app.route('/blog')
 def pagina_blog():
-    return render_template('pagina_blog.html', posts=posts_blog_exemplo, page_title="Nosso Blog", body_class="page-blog")
+    conn = None
+    cursor = None
+    posts = []
+    categorias = []
+    tags = []
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT p.*, c.nome as categoria_nome, c.slug as categoria_slug 
+            FROM posts p 
+            LEFT JOIN categorias c ON p.categoria_id = c.id 
+            ORDER BY p.data_publicacao DESC
+        """)
+        posts = cursor.fetchall()
+        # Modificado para receber categorias e tags
+        categorias, tags = get_blog_sidebar_data(cursor)
+    except Exception as err:
+        app.logger.error(f"Erro ao buscar posts para o blog: {err}")
+        return render_template("500.html", page_title="Erro ao carregar Blog"), 500
+    finally:
+        if cursor: cursor.close()
+        if conn and conn.is_connected(): conn.close()
+
+    return render_template('pagina_blog.html',
+                           posts=posts,
+                           categorias=categorias,
+                           tags=tags,  # Passando as tags para o template
+                           page_title="Nosso Blog",
+                           body_class="page-blog")
+
+@app.route('/blog/categoria/<string:categoria_slug>')
+def posts_por_categoria(categoria_slug):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    cursor.execute("""
+        SELECT p.*, c.nome as categoria_nome, c.slug as categoria_slug 
+        FROM posts p JOIN categorias c ON p.categoria_id = c.id 
+        WHERE c.slug = %s ORDER BY p.data_publicacao DESC
+    """, (categoria_slug,))
+    posts = cursor.fetchall()
+    
+    categoria_nome = posts[0]['categoria_nome'] if posts else categoria_slug
+    
+    # Modificado para receber categorias e tags
+    categorias_sidebar, tags_sidebar = get_blog_sidebar_data(cursor)
+    
+    cursor.close()
+    conn.close()
+
+    return render_template('pagina_blog.html', 
+                           posts=posts, 
+                           categorias=categorias_sidebar, 
+                           tags=tags_sidebar, # Passando as tags para o template
+                           page_title=f"Posts em '{categoria_nome}'")
+
+@app.route('/blog/tag/<string:tag_nome>')
+def posts_por_tag(tag_nome):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    # Busca os posts que têm la tag específica
+    cursor.execute("""
+        SELECT p.*, c.nome as categoria_nome, c.slug as categoria_slug
+        FROM posts p
+        JOIN posts_tags pt ON p.id = pt.post_id
+        JOIN tags t ON pt.tag_id = t.id
+        LEFT JOIN categorias c ON p.categoria_id = c.id
+        WHERE t.nome = %s
+        ORDER BY p.data_publicacao DESC
+    """, (tag_nome,))
+    posts = cursor.fetchall()
+    
+    categorias_sidebar, tags_sidebar = get_blog_sidebar_data(cursor)
+    
+    cursor.close()
+    conn.close()
+    return render_template('pagina_blog.html', 
+                           posts=posts, 
+                           categorias=categorias_sidebar, 
+                           tags=tags_sidebar, 
+                           page_title=f"Posts com a tag '{tag_nome}'")
+
+@app.route('/blog/search')
+def search_blog():
+    query = request.args.get('q', '')
+    if not query:
+        return redirect(url_for('pagina_blog'))
+        
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    
+    search_term = f"%{query}%"
+    cursor.execute("""
+        SELECT p.*, c.nome as categoria_nome, c.slug as categoria_slug 
+        FROM posts p LEFT JOIN categorias c ON p.categoria_id = c.id 
+        WHERE p.titulo LIKE %s OR p.conteudo_completo LIKE %s 
+        ORDER BY p.data_publicacao DESC
+    """, (search_term, search_term))
+    posts = cursor.fetchall()
+    
+    # Modificado para receber categorias e tags
+    categorias_sidebar, tags_sidebar = get_blog_sidebar_data(cursor)
+    
+    cursor.close()
+    conn.close()
+    return render_template('pagina_blog.html', 
+                           posts=posts, 
+                           categorias=categorias_sidebar, 
+                           tags=tags_sidebar, # Passando as tags para o template
+                           page_title=f"Resultados para '{query}'")
 
 @app.route('/blog/<string:post_slug>')
 def pagina_post_blog(post_slug):
-    print(f"Recebido slug da URL: '{post_slug}'")  # DEBUG
+    conn = None
+    cursor = None
     post_encontrado = None
-    for p_exemplo in posts_blog_exemplo:
-        print(f"Comparando '{post_slug}' com slug do post da lista: '{p_exemplo.get('slug')}'")  # DEBUG
-        if p_exemplo.get("slug") == post_slug:
-            post_encontrado = p_exemplo
-            print(f"Match! Post encontrado: {p_exemplo['titulo']}")  # DEBUG
-            break
+    categorias = []
+    tags = []
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT p.*, c.nome as categoria_nome, c.slug as categoria_slug, u.username as autor_nome
+            FROM posts p 
+            LEFT JOIN categorias c ON p.categoria_id = c.id 
+            LEFT JOIN usuarios u ON p.autor_id = u.id 
+            WHERE p.slug = %s
+        """, (post_slug,))
+        post_encontrado = cursor.fetchone()
+
+        if post_encontrado:
+             # Modificado para receber categorias e tags
+            categorias, tags = get_blog_sidebar_data(cursor)
+    except Exception as err:
+        app.logger.error(f"Erro ao buscar post {post_slug}: {err}")
+        return render_template("500.html", page_title="Erro ao carregar Post"), 500
+    finally:
+        if cursor: cursor.close()
+        if conn and conn.is_connected(): conn.close()
+
     if post_encontrado:
         return render_template('pagina_post_individual.html',
                                post=post_encontrado,
+                               categorias=categorias,
+                               tags=tags, # Passando as tags para o template
                                page_title=post_encontrado["titulo"],
                                body_class="page-post-individual")
     else:
-        print(f"Post com slug '{post_slug}' NÃO encontrado na lista!")  # DEBUG
-        return render_template('404.html', page_title="Post não encontrado", body_class="page-error"), 404
+        return render_template('404.html',
+                               page_title="Post não encontrado",
+                               body_class="page-error"), 404
 
 @app.route('/contato')
 def pagina_contato():
@@ -680,7 +855,314 @@ def exportar_csv():
         headers={"Content-Disposition": "attachment;filename=radar_pncp_licitacoes.csv"}
     )
 
- 
+# =========================================================================
+# CONFIGURAÇÃO DO FLASK-ADMIN
+# =========================================================================
+# View principal do admin que verifica se o usuário está logado - HOME DO ADMIN
+class MyAdminIndexView(AdminIndexView):
+    @expose('/')
+    def index(self):
+        if not current_user.is_authenticated:
+            return redirect(url_for('login'))
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Estatísticas
+        cursor.execute("SELECT COUNT(*) as total FROM posts")
+        total_posts = cursor.fetchone()['total']
+        
+        cursor.execute("SELECT COUNT(*) as total FROM categorias")
+        total_categorias = cursor.fetchone()['total']
+        
+        cursor.execute("SELECT COUNT(*) as total FROM tags")
+        total_tags = cursor.fetchone()['total']
+        
+        cursor.execute("SELECT * FROM posts ORDER BY data_publicacao DESC LIMIT 5")
+        posts_recentes = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        stats = {
+            'total_posts': total_posts,
+            'total_categorias': total_categorias,
+            'total_tags': total_tags,
+        }
+        
+        return self.render('admin/index.html', stats=stats, posts_recentes=posts_recentes)
+    
+    def is_accessible(self):
+        # Acessível apenas se o usuário estiver logado e autenticado
+        return current_user.is_authenticated
+
+    def inaccessible_callback(self, name, **kwargs):
+        # Se não estiver logado, redireciona para a página de login
+        flash("Você precisa estar logado para acessar a área administrativa.", "warning")
+        return redirect(url_for('login', next=request.url))
+
+class PostsView(BaseView):
+    def is_accessible(self):
+        # Acessível apenas se o usuário estiver logado
+        return current_user.is_authenticated
+
+    def inaccessible_callback(self, name, **kwargs):
+        # Redireciona para o login se não estiver autenticado
+        return redirect(url_for('login'))
+
+    # Rota para a lista de posts
+    @expose('/')
+    def list_posts(self):
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT p.id, p.titulo, p.slug, p.data_publicacao, u.username as autor_nome 
+            FROM posts p 
+            LEFT JOIN usuarios u ON p.autor_id = u.id 
+            ORDER BY p.data_publicacao DESC
+        """)
+        posts = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return self.render('admin/posts_list.html', posts=posts)
+
+    # Rota para o formulário de adicionar/editar post
+    @expose('/edit/', methods=('GET', 'POST'))
+    @expose('/edit/<int:post_id>', methods=('GET', 'POST'))
+    def edit_post(self, post_id=None):
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # --- BUSCAR DADOS PARA O FORMULÁRIO (CATEGORIAS E TAGS) ---
+        cursor.execute("SELECT id, nome FROM categorias ORDER BY nome")
+        todas_categorias = cursor.fetchall()
+        
+        cursor.execute("SELECT id, nome FROM tags ORDER BY nome")
+        todas_tags = cursor.fetchall()
+
+        post_para_formulario = {}
+        tags_atuais_do_post = [] # Lista de IDs das tags já selecionadas
+
+        # Se estiver editando, busca os dados do post e suas tags
+        if post_id:
+            cursor.execute("SELECT * FROM posts WHERE id = %s", (post_id,))
+            post_para_formulario = cursor.fetchone()
+            if not post_para_formulario:
+                flash('Post não encontrado!', 'danger')
+                cursor.close()
+                conn.close()
+                return redirect(url_for('.list_posts'))
+            
+            cursor.execute("SELECT tag_id FROM posts_tags WHERE post_id = %s", (post_id,))
+            tags_atuais_do_post = [row['tag_id'] for row in cursor.fetchall()]
+        
+        # --- LÓGICA PARA REQUISIÇÃO POST (Quando o formulário é ENVIADO) ---
+        if request.method == 'POST':
+            # 1. Pega os dados brutos do formulário
+            titulo = request.form.get('titulo')
+            slug = request.form.get('slug')
+            resumo = request.form.get('resumo')
+            conteudo_bruto = request.form.get('conteudo_completo')
+            imagem_destaque = request.form.get('imagem_destaque')
+            is_featured = 'is_featured' in request.form
+            categoria_id = request.form.get('categoria_id')
+            tags_selecionadas_ids = request.form.getlist('tags')
+            
+            import re
+            slug_limpo = re.sub(r'[^a-z0-9\-]+', '', slug.lower()).strip('-')
+            
+            # 2. Sanitiza o conteúdo HTML
+            conteudo_sanitizado = bleach.clean(conteudo_bruto,tags = [
+                "p", "br", "hr", "div", "span",
+                "h1", "h2", "h3", "h4", "h5", "h6",
+                "strong", "b", "em", "i", "u", "mark", "small", "sup", "sub",
+                "ul", "ol", "li", "dl", "dt", "dd",
+                "blockquote", "pre", "code",
+                "a", "img", "figure", "figcaption",
+                "table", "thead", "tbody", "tfoot", "tr", "td", "th",
+                "section", "article", "main", "aside", "header", "footer", "nav"
+            ], attributes = {   # Atributos permitidos
+                'a': ['href', 'title', "target", "rel"],
+                'img': ['src', 'alt', 'title',"width", "height", 'style'],
+                'div': ['class', 'id', 'style'],
+                'span': ['class', 'id', 'style'],
+                'section': ['class', 'id'],
+                'article': ['class', 'id'],
+                'main': ['class', 'id'],
+                "table": ["class", "style", "border", "cellpadding", "cellspacing"],
+                "td": ["class", "style", "colspan", "rowspan"],
+                "th": ["class", "style", "colspan", "rowspan"],
+                "*": ["class", "id", "style"]
+            })
+
+            try:
+                if post_id:
+                    # UPDATE
+                    query = """UPDATE posts SET titulo=%s, slug=%s, resumo=%s, conteudo_completo=%s, imagem_destaque=%s, categoria_id=%s, is_featured=%s WHERE id=%s"""
+                    cursor.execute(query, (titulo, slug_limpo, resumo, conteudo_sanitizado, imagem_destaque, categoria_id, is_featured, post_id))
+                else:
+                    # INSERT
+                    query = """INSERT INTO posts (titulo, slug, resumo, conteudo_completo, autor_id, imagem_destaque, categoria_id, is_featured) 
+                               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+                    cursor.execute(query, (titulo, slug_limpo, resumo, conteudo_sanitizado, current_user.id, imagem_destaque, categoria_id, is_featured))
+                    post_id = cursor.lastrowid
+                
+                # Atualiza as tags na tabela de junção
+                cursor.execute("DELETE FROM posts_tags WHERE post_id = %s", (post_id,))
+                if tags_selecionadas_ids:
+                    tags_para_inserir = [(post_id, tag_id) for tag_id in tags_selecionadas_ids]
+                    cursor.executemany("INSERT INTO posts_tags (post_id, tag_id) VALUES (%s, %s)", tags_para_inserir)
+
+                conn.commit()
+                flash('Post salvo com sucesso!', 'success')
+                
+                # Fecha tudo e redireciona
+                cursor.close()
+                conn.close()
+                return redirect(url_for('.list_posts'))
+            
+            except mysql.connector.Error as err:
+                conn.rollback()
+                if err.errno == 1062:
+                    flash(f"Erro: O slug '{slug_limpo}' já existe. Por favor, escolha outro.", 'danger')
+                    post_para_formulario = request.form
+                else:
+                    flash(f"Ocorreu um erro no banco de dados: {err}", "danger")
+                    post_para_formulario = request.form
+        
+        # --- RENDERIZA O FORMULÁRIO (PARA REQUISIÇÃO GET OU APÓS ERRO NO POST) ---
+        cursor.close()
+        conn.close()
+        
+        tinymce_key = os.getenv('TINYMCE_API_KEY')
+        return self.render('admin/post_form.html', 
+                           post=post_para_formulario, 
+                           post_id=post_id, 
+                           tinymce_key=tinymce_key,
+                           todas_categorias=todas_categorias,
+                           todas_tags=todas_tags,
+                           tags_atuais=tags_atuais_do_post)
+
+    # Rota para deletar um post
+    @expose('/delete/<int:post_id>', methods=('POST',))
+    def delete_post(self, post_id):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM posts WHERE id = %s", (post_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        flash('Post excluído com sucesso!', 'success')
+        return redirect(url_for('.list_posts'))
+
+# Inicializa o Flask-Admin
+admin = Admin(
+    app, 
+    name='Painel RADAR PNCP', 
+    template_mode='bootstrap4',
+    index_view=MyAdminIndexView()
+)
+
+# =========================================================================
+
+# =========================================================================
+# BLOCO DE CÓDIGO 5: VIEW DE ADMINISTRAÇÃO PARA CATEGORIAS E TAGS
+# =========================================================================
+class CategoriaView(BaseView):
+    def is_accessible(self):
+        return current_user.is_authenticated
+
+    @expose('/', methods=('GET', 'POST'))
+    def index(self):
+        if request.method == 'POST':
+            nome = request.form.get('nome')
+            slug = request.form.get('slug')
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("INSERT INTO categorias (nome, slug) VALUES (%s, %s)", (nome, slug))
+                conn.commit()
+                flash('Categoria criada com sucesso!', 'success')
+            except mysql.connector.Error as err:
+                flash(f'Erro ao criar categoria: {err}', 'danger')
+            finally:
+                cursor.close()
+                conn.close()
+            return redirect(url_for('.index'))
+
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM categorias ORDER BY nome")
+        categorias = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return self.render('admin/categorias_tags.html', items=categorias, title="Categorias", endpoint_name="categorias")
+
+    @expose('/delete/<int:item_id>', methods=('POST',))
+    def delete(self, item_id):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM categorias WHERE id = %s", (item_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        flash('Categoria excluída com sucesso.', 'success')
+        return redirect(url_for('.index'))
+
+class TagView(BaseView):
+    def is_accessible(self):
+        return current_user.is_authenticated
+    
+    # Esta view é quase idêntica à de categorias, mas usa a tabela 'tags'
+    @expose('/', methods=('GET', 'POST'))
+    def index(self):
+        if request.method == 'POST':
+            nome = request.form.get('nome')
+            # Tags não precisam de slug, apenas nome.
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("INSERT INTO tags (nome) VALUES (%s)", (nome,))
+                conn.commit()
+                flash('Tag criada com sucesso!', 'success')
+            except mysql.connector.IntegrityError as err:
+                # Erro 1062 = chave duplicada
+                if err.errno == 1062:
+                    flash(f"A tag '{nome}' já existe. Escolha outro nome.", 'warning')
+                else:
+                    flash('Erro de integridade no banco de dados.', 'danger')
+            except mysql.connector.Error as err:
+                # Para qualquer outro erro do MySQL
+                flash('Erro inesperado ao criar tag. Tente novamente.', 'danger')
+                app.logger.error(f"Erro MySQL ao criar tag: {err}")
+            finally:
+                cursor.close()
+                conn.close()
+            return redirect(url_for('.index'))
+
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM tags ORDER BY nome")
+        tags = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return self.render('admin/categorias_tags.html', items=tags, title="Tags", endpoint_name="tags")
+
+    @expose('/delete/<int:item_id>', methods=('POST',))
+    def delete(self, item_id):
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM tags WHERE id = %s", (item_id,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        flash('Tag excluída com sucesso.', 'success')
+        return redirect(url_for('.index'))
+
+admin.add_view(PostsView(name='Posts', endpoint='posts'))
+admin.add_view(CategoriaView(name='Categorias', endpoint='categorias'))
+admin.add_view(TagView(name='Tags', endpoint='tags'))
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     # Em produção real, você não usaria app.run(), mas sim um servidor WSGI como Gunicorn.

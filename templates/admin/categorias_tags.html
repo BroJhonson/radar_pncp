@@ -1,0 +1,64 @@
+<!-- templates/admin/categorias_tags.html -->
+{% extends 'admin/master.html' %}
+
+{% block body %}
+<div class="container-fluid">
+    <h1>Gerenciar {{ title }}</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="row">
+        <div class="col-md-4">
+            <h4>Adicionar Nova {{ title[:-1] }}</h4>
+            <form method="POST">
+                <div class="form-group mb-2">
+                    <label for="nome">Nome</label>
+                    <input type="text" class="form-control" name="nome" required>
+                </div>
+                {% if endpoint_name == 'categorias' %}
+                <div class="form-group mb-3">
+                    <label for="slug">Slug</label>
+                    <input type="text" class="form-control" name="slug" required>
+                </div>
+                {% endif %}
+                <button type="submit" class="btn btn-primary">Adicionar</button>
+            </form>
+        </div>
+        <div class="col-md-8">
+            <h4>{{ title }} Existentes</h4>
+            <table class="table table-bordered table-striped">
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        {% if endpoint_name == 'categorias' %}<th>Slug</th>{% endif %}
+                        <th>Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in items %}
+                    <tr>
+                        <td>{{ item.nome }}</td>
+                        {% if endpoint_name == 'categorias' %}<td>{{ item.slug }}</td>{% endif %}
+                        <td>
+                            <form action="{{ url_for(endpoint_name + '.delete', item_id=item.id) }}" method="POST" onsubmit="return confirm('Tem certeza?');">
+                                <button type="submit" class="btn btn-xs btn-danger">Excluir</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="3">Nenhum item encontrado.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
