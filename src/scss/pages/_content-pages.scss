@@ -86,3 +86,60 @@
         }
     }
 }
+
+// =========================================================
+// Estilos para a barra lateral do blog
+.blog-sidebar {
+  .sidebar-widget {
+    margin-bottom: 2rem;
+    padding: 1.5rem;
+    background-color: $light;
+    border-radius: $border-radius;
+  }
+
+  .widget-title {
+    font-size: 1.1rem;      // << Tamanho da fonte reduzido
+    font-weight: $font-weight-bold;
+    margin-bottom: 1rem;
+    font-style: normal;     // << Remove o itálico
+    color: $dark;
+  }
+}
+
+// Para a lista de categorias e tags
+.sidebar-list {
+  list-style: none;
+  padding-left: 0;
+
+  li {
+    margin-bottom: 0.5rem;
+    a {
+      text-decoration: none;
+      color: $secondary;
+      &:hover {
+        color: $primary;
+      }
+    }
+  }
+}
+
+// Estilos para a nuvem de tags
+.tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  .tag-item {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    background-color: $gray-200;
+    border-radius: $border-radius-pill;
+    font-size: 0.85rem;
+    text-decoration: none;
+    color: $dark;
+    transition: all 0.2s ease;
+    &:hover {
+      background-color: $primary;
+      color: $white;
+    }
+  }
+}

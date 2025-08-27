@@ -1,0 +1,46 @@
+<!-- templates/_blog_sidebar.html -->
+<div class="col-lg-4">
+    <div class="position-sticky" style="top: 2rem;">
+        <!-- Caixa de Busca -->
+        <div class="sidebar-widget">
+            <h4 class="widget-title">Busca no Blog</h4>
+            <form action="{{ url_for('search_blog') }}" method="GET">
+                <div class="input-group">
+                    <input type="text" name="q" class="form-control" placeholder="Procurar posts..." required>
+                    <button class="btn btn-primary" type="submit"><i class="bi bi-search"></i></button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Lista de Categorias -->
+        {% if categorias and categorias|length > 0 %}
+        <div class="sidebar-widget">
+            <h4 class="widget-title">Categorias</h4>
+            <ol class="sidebar-list">
+                {% for cat in categorias %}
+                <li><a href="{{ url_for('posts_por_categoria', categoria_slug=cat.slug) }}">{{ cat.nome }}</a></li>
+                {% endfor %}
+            </ol>
+        </div>
+        {% endif %}
+
+        <!-- Nuvem de Tags (NOVO) -->
+        {% if tags and tags|length > 0 %}
+        <div class="sidebar-widget">
+            <h4 class="widget-title">Tags</h4>
+            <div class="tag-cloud">
+                {% for tag in tags %}
+                <a href="{{ url_for('posts_por_tag', tag_nome=tag.nome) }}" class="tag-item">{{ tag.nome }}</a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Anúncio -->
+        <div class="sidebar-widget">
+            <h4 class="widget-title">Publicidade</h4>
+            <!-- Coloque seu código de anúncio ou imagem aqui -->
+            <p class="text-muted small text-center">Espaço para anúncio</p>
+        </div>
+    </div>
+</div>

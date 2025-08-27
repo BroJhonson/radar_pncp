@@ -45,5 +45,3 @@ volumes:
 #   docker-compose up -d 
 ## para ver os containers rodando
 #   docker ps
-## para parar o container
-#   docker-compose down 
