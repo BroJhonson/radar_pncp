@@ -19,10 +19,10 @@ volumes:
 ##Iniciar novo contenner ou para iniciar o container novamente depois de parado quando inicializa o windows
 #   docker-compose up -d
 
-## Copiar o script para dentro do container
-#   docker cp create_mariadb.sql plataforma-licitacoes_mariadb-db-1:/tmp/create_mariadb.sql
+## Copiar o script para dentro do container   --- o nome do banco de dados vai ser criado automaticamente pelo nome da pasta 
+#   docker cp create_mariadb.sql radar_pncp-db-1:/tmp/create_mariadb.sql
 
-## Criar o banco de dados e as tabelas executando o script SQL dentro do container
+## Criar o banco de dados e as tabelas executando o script SQL dentro do container  NÃO ESQUECER DE TER O .ENV NO CAMINHO
 #   docker-compose exec db mariadb -u root -p'Querocomer123' radar_pncp_db -e "SOURCE /tmp/create_mariadb.sql"
 
 ## Parar o container
