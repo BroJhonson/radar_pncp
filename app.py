@@ -6,7 +6,6 @@ from flask_login import LoginManager, UserMixin, login_user, logout_user, curren
 from flask_bcrypt import Bcrypt
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
-from flask_cors import CORS  # Adicionado para CORS
 import requests  # Para chamar a API do IBGE
 from markupsafe import Markup, escape
 # Para envio de e-mail
@@ -26,10 +25,6 @@ load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 
 # --- Configurações ---
 app = Flask(__name__)
-
-# Configuração CORS para permitir comunicação com frontend
-CORS(app, origins=["*"])  # Em produção, especificar domínios específicos
-
 # Configurações de segurança e login
 bcrypt = Bcrypt(app)
 login_manager = LoginManager(app)
@@ -49,7 +44,7 @@ if not app.secret_key:
 app.logger.info("FLASK_SECRET_KEY carregada com sucesso do ambiente.")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # Acho que isso não é mais necessário
-DATABASE_PATH = os.path.join(BASE_DIR, 'database', 'database.db')   # Ajustado para nova estrutura
+DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')   # nem isso
 
 # BLOCO DE CÓDIGO 1: CONFIGURAÇÃO DO USUÁRIO PARA FLASK-LOGIN
 class User(UserMixin):
