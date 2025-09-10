@@ -1,0 +1,139 @@
+{% extends 'admin/master.html' %}
+
+{% block head %}
+    {{ super() }}
+    <script src="https://cdn.tiny.cloud/1/{{ tinymce_key }}/tinymce/6/tinymce.min.js" referrerpolicy="origin"></script>
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />    
+{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <h2>{% if post_id %}Editar Post{% else %}Criar Novo Post{% endif %}</h2>
+
+  <form method="POST">
+    <div class="row">
+      <div class="col-md-8">
+        <div class="form-group mb-3">
+          <label for="titulo">Título</label>
+          <input type="text" class="form-control" id="titulo" name="titulo" maxlength="100" value="{{ post.get('titulo', '') }}" required>
+        </div>
+        <div class="form-group mb-3">
+          <label for="slug">Slug (URL amigável)</label>
+          <input type="text" class="form-control" id="slug" name="slug" maxlength="120" value="{{ post.get('slug', '') }}" required>
+          <small class="form-text text-muted">Ex: como-ganhar-licitacoes (use apenas letras, números e hifens)</small>
+        </div>
+        <div class="form-group mb-3">
+          <label for="imagem_destaque">URL da Imagem de Destaque</label>
+          <input type="text" class="form-control" id="imagem_destaque" name="imagem_destaque" maxlength="255" value="{{ post.get('imagem_destaque', '') }}">
+          <small class="form-text text-muted">Cole o link completo (URL) da imagem que aparecerá na lista do blog.</small>
+        </div>
+        <div class="form-group mb-3">
+          <label for="resumo">Resumo</label>
+          <textarea class="form-control" id="resumo" name="resumo" maxlength="300" rows="3">{{ post.get('resumo', '') }}</textarea>
+        </div>
+        <div class="form-group mb-3">
+          <label for="conteudo_completo">Conteúdo Completo</label>
+          <textarea class="form-control" id="conteudo_completo" name="conteudo_completo" rows="15">{{ post.get('conteudo_completo', '') }}</textarea>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card card-body">
+          <div class="form-group mb-3">
+            <label for="categoria_id">Categoria</label>
+            <select class="form-control" id="categoria_id" name="categoria_id">
+              <option value="">-- Nenhuma --</option>
+              {% for cat in todas_categorias %}
+              <option value="{{ cat.id }}" {% if post.get('categoria_id') == cat.id %}selected{% endif %}>
+                {{ cat.nome }}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          
+          <hr>
+          <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="is_featured" name="is_featured" value="1" {% if post.get('is_featured') %}checked{% endif %}>
+              <label class="form-check-label" for="is_featured">
+                  Destaque na Página Principal?
+              </label>
+          </div>
+
+          <div class="form-group mb-3">
+            <label for="tags">Tags</label>
+            <select class="form-control" id="tags" name="tags" multiple size="8">
+              {% for tag in todas_tags %}
+              <option value="{{ tag.id }}" {% if tag.id in tags_atuais %}selected{% endif %}>
+                {{ tag.nome }}
+              </option>
+              {% endfor %}
+            </select>
+            
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <br>
+    
+    <button type="submit" class="btn btn-primary">Salvar</button>
+    <a href="{{ url_for('posts.list_posts') }}" class="btn btn-secondary">Cancelar</a>
+  </form>
+</div>
+{% endblock %}
+
+{% block tail %}
+    {{ super() }}
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
+    <script>
+      // Para seleção de múltiplas tags com Select2
+      $(document).ready(function() {
+          $('#tags').select2({
+              placeholder: "Selecione as tags",
+              allowClear: true
+          });
+      });
+
+      // Geração automática de slug a partir do título
+      const titleInput = document.getElementById('titulo');
+      const slugInput = document.getElementById('slug');
+
+      function generateSlug(text) {
+          return text.toString().toLowerCase()
+              .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // Remove acentos
+              .replace(/\s+/g, '-')           // Substitui espaços por -
+              .replace(/[^\w\-]+/g, '')       // Remove caracteres não alfanuméricos exceto -
+              .replace(/\-\-+/g, '-')         // Substitui múltiplos - por um único -
+              .replace(/^-+/, '')             // Remove - do início
+              .replace(/-+$/, '');            // Remove - do final
+      }
+
+      let slugManuallyEdited = slugInput.value !== '';
+      slugInput.addEventListener('input', () => {
+          slugManuallyEdited = true;
+      });
+      titleInput.addEventListener('keyup', () => {
+          // Só gera o slug se ele não tiver sido editado manualmente
+          if (!slugManuallyEdited) {
+              slugInput.value = generateSlug(titleInput.value);
+          }
+      });
+
+      
+
+    </script>
+
+    <script>
+      tinymce.init({
+        selector: '#conteudo_completo',
+        height: 500,
+        menubar: true,
+        plugins: 'lists link image table code',
+        toolbar: 'undo redo | formatselect | bold italic underline | alignleft aligncenter alignright alignjustify | bullist numlist outdent indent | link image | code',
+        content_style: "body { font-family:Helvetica,Arial,sans-serif; font-size:14px }",
+        branding: false,
+        language: 'pt_BR' // Se quiser português
+      });
+    </script>
+{% endblock %}
