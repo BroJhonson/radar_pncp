@@ -1,0 +1,47 @@
+#version: '3.8'
+services:
+  db:
+    image: mariadb:latest
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: Querocomer123
+      MYSQL_DATABASE: radar_pncp_db
+      MYSQL_USER: joabson_admin
+      MYSQL_PASSWORD: Querocomer123@ #Tem que ser a mesma senha do .env
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+volumes:
+  mariadb_data: 
+
+##Iniciar novo contenner ou para iniciar o container novamente depois de parado quando inicializa o windows
+#   docker-compose up -d
+
+## Copiar o script para dentro do container   --- o nome do banco de dados vai ser criado automaticamente pelo nome da pasta 
+#   docker cp create_mariadb.sql radar_pncp-db-1:/tmp/create_mariadb.sql
+
+## Criar o banco de dados e as tabelas executando o script SQL dentro do container  NÃO ESQUECER DE TER O .ENV NO CAMINHO
+#   docker-compose exec db mariadb -u root -p'Querocomer123' radar_pncp_db -e "SOURCE /tmp/create_mariadb.sql"
+
+## Parar o container
+#   docker-compose down
+
+## Acessar o banco de dados dentro do container
+#   docker-compose exec db mariadb -u root -p'Querocomer123'  
+#   docker-compose exec db mariadb -u joabson_admin -p'Querocomer123@' radar_pncp_db
+
+# para remover o volume (dados do banco) se quiser reiniciar tudo do zero
+#   docker-compose down -v  
+# ou
+#   docker volume rm plataforma-licitacoes_mariadb_mariadb_data
+
+# para ver os logs do container
+#   docker logs plataforma-licitacoes_mariadb-db-1 -f
+
+
+## para iniciar o container em segundo plano
+#   docker-compose up -d 
+## para ver os containers rodando
+#   docker ps

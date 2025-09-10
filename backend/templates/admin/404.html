@@ -1,0 +1,10 @@
+<!-- backend/templates/admin/404.html -->
+{% extends 'admin/master.html' %}
+
+{% block body %}
+<div class="container-fluid">
+    <h1>Erro 404 - Página Não Encontrada</h1>
+    <p>A página que você tentou acessar na área administrativa não existe.</p>
+    <a href="{{ url_for('admin.index') }}" class="btn btn-primary">Voltar para o Painel</a>
+</div>
+{% endblock %}
