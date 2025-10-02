@@ -21,6 +21,7 @@ from datetime import datetime, date
 import bleach
 from flask_cors import CORS
 import logging
+from decimal import Decimal # Para manipular números decimais do banco
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 
 # --- Configurações ---
@@ -50,12 +51,6 @@ else:
 # Habilita o CORS apenas para as rotas da API pública, permitindo que o frontend faça requisições
 # A área /admin não precisa de CORS pois será acessada diretamente no mesmo domínio do backend.
 CORS(app, resources={r"/api/.*": {"origins": allowed_origins}})
-#CORS(app, resources={
-    #r"/api/*": {"origins": allowed_origins},
-    #r"/licitacoes*": {"origins": allowed_origins}, # Adicionando as rotas antigas por segurança
-    #r"/licitacao/*": {"origins": allowed_origins},
-    #r"/referencias/*": {"origins": allowed_origins}
-#})
 
 # Configurações de segurança e login
 bcrypt = Bcrypt(app)
@@ -103,16 +98,31 @@ def get_db_connection(max_retries=3, delay=2):
     app.logger.error("Falha ao conectar ao banco de dados após múltiplas tentativas.")
     return None
 
-# --- Função para formatar datas em JSON ---
-def formatar_datas_para_json(licitacao_dict):
-    """Converte objetos date/datetime em strings ISO para serialização JSON."""
-    if licitacao_dict is None:
+# --- Função para formatar um dicionário para JSON (datas e números) ---
+def formatar_para_json(dicionario):
+    """Converte objetos date/datetime para strings e Decimal para float/int."""
+    if dicionario is None:
         return None
-    for key, value in licitacao_dict.items():
-        if isinstance(value, (datetime, date)):
-            licitacao_dict[key] = value.isoformat()
-    return licitacao_dict
     
+    for key, value in dicionario.items():
+        # Tratamento de datas (como você já fazia)
+        if isinstance(value, (datetime, date)):
+            dicionario[key] = value.isoformat()
+        # NOVO: Tratamento de números decimais
+        elif isinstance(value, Decimal):
+            # Converte Decimal para float
+            float_value = float(value)
+            # Se o número for inteiro (ex: 1.0000), converte para int (1)
+            if float_value.is_integer():
+                dicionario[key] = int(float_value)
+            # Senão, mantém como float (ex: 123.45)
+            else:
+                dicionario[key] = float_value
+                
+    return dicionario
+
+
+# --- Função para gerar slugs únicos ---
 def generate_unique_slug(conn, base_slug, table='posts'):
     cursor = conn.cursor()
     slug = base_slug
@@ -428,7 +438,7 @@ def get_licitacoes():
         licitacoes_lista_bruta = cursor_dados.fetchall()
         
         # FORMATAÇÃO AQUI
-        licitacoes_lista = [formatar_datas_para_json(row) for row in licitacoes_lista_bruta]
+        licitacoes_lista = [formatar_para_json(row) for row in licitacoes_lista_bruta]
 
 
     except mysql.connector.Error as err:
@@ -468,18 +478,18 @@ def get_detalhe_licitacao(numero_controle_pncp):
         conn.close()
         return jsonify({"erro": "Licitação não encontrada", "numeroControlePNCP": numero_controle_pncp}), 404
 
-    licitacao_principal_dict = formatar_datas_para_json(licitacao_principal_row)
+    licitacao_principal_dict = formatar_para_json(licitacao_principal_row)
     licitacao_id_local = licitacao_principal_dict['id']
 
     query_itens = "SELECT * FROM itens_licitacao WHERE licitacao_id = %s"
     cursor.execute(query_itens, (licitacao_id_local,))
     itens_rows = cursor.fetchall()
-    itens_lista = [formatar_datas_para_json(row) for row in itens_rows]
+    itens_lista = [formatar_para_json(row) for row in itens_rows]
 
     query_arquivos = "SELECT * FROM arquivos_licitacao WHERE licitacao_id = %s"
     cursor.execute(query_arquivos, (licitacao_id_local,))
     arquivos_rows = cursor.fetchall()
-    arquivos_lista = [formatar_datas_para_json(row) for row in arquivos_rows]
+    arquivos_lista = [formatar_para_json(row) for row in arquivos_rows]
 
     conn.close()
 
@@ -499,7 +509,6 @@ def get_modalidades_referencia():
     modalidades = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return jsonify(modalidades)
-    #return jsonify([{"exemplo": "modalidades"}]) # Placeholder
 
 @app.route('/api/referencias/statuscompra', methods=['GET'])
 def get_statuscompra_referencia():
@@ -518,8 +527,7 @@ def get_statusradar_referencia():
     status_radar_rows = cursor.fetchall()
     status_radar = [{"id": row['situacaoReal'], "nome": row['situacaoReal']} for row in status_radar_rows]
     conn.close()
-    return jsonify(status_radar)
-    #return jsonify([{"exemplo": "status"}]) # Placeholder
+    return jsonify(status_radar)    
 
 # --- Rota API IBGE (mantida do frontend) ---
 @app.route('/api/ibge/municipios/<uf_sigla>', methods=['GET'])
@@ -629,7 +637,10 @@ def exportar_csv():
     )
     return Response(output, mimetype="text/csv", headers={"Content-Disposition":"attachment;filename=export.csv"})
 
+
+# ===============================================================
 # =================== Rotas para posts do blog ==================
+# ===============================================================
 @app.route('/api/posts', methods=['GET'])
 def get_all_posts():
     conn = get_db_connection()
@@ -692,7 +703,7 @@ def get_all_posts():
     cursor.close()
     conn.close()
 
-    posts_formatados = [formatar_datas_para_json(p) for p in posts]
+    posts_formatados = [formatar_para_json(p) for p in posts]
     
     # --- 5. Retorna o JSON com os dados da paginação ---
     return jsonify(
@@ -748,7 +759,7 @@ def get_single_post(post_slug):
     conn.close()
   
     # Formata as datas e adiciona as tags ao resultado final
-    post_formatado = formatar_datas_para_json(post)
+    post_formatado = formatar_para_json(post)
     post_formatado['tags'] = tags # Adiciona a lista de tags ao dicionário do post
 
     return jsonify(post=post_formatado)
@@ -771,11 +782,12 @@ def get_featured_posts():
     cursor.close()
     conn.close()
 
-    posts_formatados = [formatar_datas_para_json(p) for p in posts]
+    posts_formatados = [formatar_para_json(p) for p in posts]
     return jsonify(posts=posts_formatados)
 
+
 # =========================================================================
-# CONFIGURAÇÃO DO FLASK-ADMIN
+# ========= CONFIGURAÇÃO DO FLASK-ADMIN -- BACKEND ADMINISTRATIVO =========
 # =========================================================================
 # View principal do admin que verifica se o usuário está logado - HOME DO ADMIN
 class MyAdminIndexView(AdminIndexView):
@@ -1020,11 +1032,7 @@ admin = Admin(
     index_view=MyAdminIndexView()
 )
 
-# =========================================================================
-
-# =========================================================================
 # BLOCO DE CÓDIGO 5: VIEW DE ADMINISTRAÇÃO PARA CATEGORIAS E TAGS
-# =========================================================================
 class CategoriaView(BaseView):
     def is_accessible(self):
         return current_user.is_authenticated
@@ -1115,6 +1123,7 @@ class TagView(BaseView):
         conn.close()
         flash('Tag excluída com sucesso.', 'success')
         return redirect(url_for('.index'))
+    
 # =========================================================================
 # =================== Rotas API para categorias e tags ==================
 @app.route('/api/categorias', methods=['GET'])
@@ -1138,11 +1147,14 @@ def get_all_tags():
     cursor.close()
     conn.close()
     return jsonify(tags=tags)
-# =========================================================================
+# ============================================================================
 
 admin.add_view(PostsView(name='Posts', endpoint='posts'))
 admin.add_view(CategoriaView(name='Categorias', endpoint='categorias'))
 admin.add_view(TagView(name='Tags', endpoint='tags'))
+
+# ============= acaba aqui o Flask-Admin e rotas do admin ====================
+# ============================================================================
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
