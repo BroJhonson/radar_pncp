@@ -10,6 +10,7 @@ database.db
 sync_api.log
 failed_processing_data.jsonl
 
+logs/
 # Variáveis de Ambiente
 # NUNCA envie este arquivo para o GitHub! Ele contém senhas e chaves.
 .env

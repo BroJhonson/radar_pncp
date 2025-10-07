@@ -21,8 +21,34 @@ from datetime import datetime, date
 import bleach
 from flask_cors import CORS
 import logging
+from logging.handlers import RotatingFileHandler # Para log rotate
 from decimal import Decimal # Para manipular números decimais do banco
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
+
+# --- CONFIGURAÇÃO DE LOGGING PARA A APLICAÇÃO FLASK ---
+# Garante que o diretório de logs exista
+if not os.path.exists('logs'):
+    os.mkdir('logs')
+
+# Cria um handler que rotaciona os arquivos de log
+# Manterá 5 arquivos de 10MB cada. Quando o log atual atinge 10MB,
+# ele é renomeado para app.log.1 e um novo app.log é criado.
+file_handler = RotatingFileHandler('logs/app.log', maxBytes=10240000, backupCount=5)
+
+# Define o formato do log
+file_handler.setFormatter(logging.Formatter(
+    '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
+))
+
+# Define o nível do log
+file_handler.setLevel(logging.INFO) # Em produção, INFO é um bom nível. Para depurar, use logging.DEBUG
+
+# Adiciona o handler ao logger da aplicação Flask
+app.logger.addHandler(file_handler)
+app.logger.setLevel(logging.INFO)
+
+app.logger.info('Aplicação Radar PNCP iniciada')
+# --- FIM DA CONFIGURAÇÃO DE LOGGING ---
 
 # --- Configurações ---
 app = Flask(__name__, template_folder='templates') # O template_folder agora aponta para 'backend/templates/'
