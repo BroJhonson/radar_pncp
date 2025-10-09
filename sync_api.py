@@ -41,6 +41,7 @@ if not logger.handlers:
 # Define quais exceções do 'requests' devem acionar uma retentativa
 RETRYABLE_REQUESTS_EXCEPTIONS = (
     requests.exceptions.Timeout,
+    requests.exceptions.ReadTimeout, # CORREÇÃO: Adicionado explicitamente
     requests.exceptions.ConnectionError,
     requests.exceptions.HTTPError, # Vamos incluir HTTPError, mas filtrar por status codes abaixo
 )
@@ -79,9 +80,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Define o caminho completo para o arquivo do banco de dados
 DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')
 TAMANHO_PAGINA_SYNC  = 50 # OBRIGATORIO
-LIMITE_PAGINAS_TESTE_SYNC = 1 #None # OBRIGATORIO. Mudar para 'None' para buscar todas.
+LIMITE_PAGINAS_TESTE_SYNC = None # OBRIGATORIO. Mudar para 'None' para buscar todas.
 CODIGOS_MODALIDADE = [1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO)
-DIAS_JANELA_SINCRONIZACAO = 7 # 365 #Periodo da busca
+DIAS_JANELA_SINCRONIZACAO = 365 #Periodo da busca
 API_BASE_URL = "https://pncp.gov.br/api/consulta" # (URL base da API do PNCP)      
 API_BASE_URL_PNCP_API = "https://pncp.gov.br/pncp-api"   # Para itens e arquivos    ## PARA TODOS OS LINKS DE ARQUIVOS E ITENS USAR PAGINAÇÃO SE NECESSARIO ##
 # ======= Fim das Configurações do Processamento das Licitações ============================== #
@@ -387,22 +388,26 @@ def fetch_licitacoes_por_atualizacao(data_inicio_str, data_fim_str, codigo_modal
         data_api = response.json()
         return data_api.get('data'), data_api.get('paginasRestantes', 0)
     except requests.exceptions.HTTPError as http_err:
-        if http_err.response.status_code not in RETRYABLE_STATUS_CODES:
-            logger.error(f"SYNC_API: Erro HTTP NÃO RETENTÁVEL (modalidade {codigo_modalidade_api}, pag {pagina}): {http_err}")
-        # O log de warning da tenacity já terá sido emitido para erros retentáveis.
-        # Podemos logar um erro final se todas as tentativas falharem.
-        # else:
-        #     logger.error(f"SYNC_API: Todas as retentativas falharam para HTTPError {http_err.response.status_code} (modalidade {codigo_modalidade_api}, pag {pagina})")
-
-        # O logger.critical na função chamadora (sync_licitacoes_ultima_janela_anual)
-        # já trata o caso de licitacoes_data ser None.
-        # Se quisermos ser mais explícitos aqui sobre a falha final:
+        # CORREÇÃO: Verifica se o erro DEVE ser retentado. Se sim, RELANÇA a exceção.
+        if should_retry_http_error(http_err):
+            logger.warning(f"SYNC_API: Erro HTTP retentável {http_err.response.status_code} detectado. Deixando 'tenacity' tratar.")
+            raise http_err # <-- Essencial para acionar a retentativa
+        
+        # Se não for retentável (ex: 404 Not Found), loga como erro final e continua.
+        logger.error(f"SYNC_API: Erro HTTP NÃO RETENTÁVEL (modalidade {codigo_modalidade_api}, pag {pagina}): {http_err}")
         if http_err.response is not None:
              logger.error(f"SYNC_API: Detalhes da resposta final - Status: {http_err.response.status_code}, Texto: {http_err.response.text[:200]}")
-        return None, 0 # (data, paginasRestantes) - Indica falha
+        return None, 0 # Indica falha não retentável
+
+    except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as net_err:
+        # CORREÇÃO: Captura exceções de rede e as relança para o decorador 'tenacity'.
+        logger.warning(f"SYNC_API: Erro de rede retentável ({type(net_err).__name__}) detectado. Deixando 'tenacity' tratar.")
+        raise net_err # <-- Essencial para acionar a retentativa
+
     except Exception as e:
-        logger.exception(f"SYNC_API: Erro GERAL (não-requests) ao buscar (modalidade {codigo_modalidade_api}, pag {pagina})")
-        return None, 0 # (data, paginasRestantes) - Indica falha
+        # Este bloco agora só vai capturar erros verdadeiramente inesperados (ex: JSONDecodeError)
+        logger.exception(f"SYNC_API: Erro GERAL INESPERADO (não-requests) ao buscar (modalidade {codigo_modalidade_api}, pag {pagina})")
+        return None, 0
 
 
 def  save_licitacao_to_db(conn, licitacao_api_item): 
@@ -515,10 +520,12 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     if flag_houve_mudanca_real:
         necessita_buscar_itens = True
     elif licitacao_id_local_final: # Se já existe no DB mas não houve mudança na dataAtualizacao
-        cursor.execute("SELECT COUNT(id) FROM itens_licitacao WHERE licitacao_id = %s", (licitacao_id_local_final,))
-        if cursor.fetchone()[0] == 0:
-            necessita_buscar_itens = True
-            logger.error(f"INFO (save_db): Licitação {licitacao_db_parcial['numeroControlePNCP']} sem itens no banco. Buscando...")
+        # CORREÇÃO: Adicionado alias 'AS total' e acesso por chave de dicionário.
+        cursor.execute("SELECT COUNT(id) AS total FROM itens_licitacao WHERE licitacao_id = %s", (licitacao_id_local_final,))
+        resultado = cursor.fetchone()
+        # CORREÇÃO: Verifica se o resultado não é None e acessa pela chave 'total'.
+        if resultado and resultado['total'] == 0:
+            necessita_buscar_itens = True # Se não há itens, busca para popular
 
 
     if necessita_buscar_itens and licitacao_db_parcial['orgaoEntidadeCnpj'] and licitacao_db_parcial['anoCompra'] and licitacao_db_parcial['sequencialCompra'] is not None:
@@ -647,7 +654,7 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
                 cursor.execute("SELECT id FROM licitacoes WHERE numeroControlePNCP = %s", (licitacao_db_parcial['numeroControlePNCP'],))
                 id_row = cursor.fetchone()
                 if id_row: 
-                    licitacao_id_local_final = id_row[0]
+                    licitacao_id_local_final = id_row['id']
                     logger.info(f"INFO (SAVE_DB): Licitação {licitacao_db_parcial['numeroControlePNCP']} ATUALIZADA. ID: {licitacao_id_local_final}.")
 
         elif row_existente:
@@ -685,7 +692,7 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     elif licitacao_id_local_final: # Se a licitação já existe no DB
         # Verificamos se já existem arquivos para ela no banco
         # Se não existirem, marcamos para buscar para saber se há arquivos na API dessa vez
-        cursor.execute("SELECT COUNT(id) as total FROM itens_licitacao WHERE licitacao_id = %s", (licitacao_id_local_final,))
+        cursor.execute("SELECT COUNT(id) as total FROM arquivos_licitacao WHERE licitacao_id = %s", (licitacao_id_local_final,))
         resultado_contagem = cursor.fetchone()
         if resultado_contagem and resultado_contagem['total'] == 0:
             necessita_buscar_arquivos = True
@@ -749,6 +756,13 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
         logger.info(f"ITENS_SAVE: Sem itens para salvar para licitação ID {licitacao_id_local}.") # Mudado para INFO
         return
 
+     # ===== VALIDAÇÃO ADICIONADA =====
+    if not isinstance(lista_itens_api, list):
+        logger.error(f"ITENS_SAVE: ERRO DE TIPO DE DADO. Esperava uma lista de itens, mas recebeu {type(lista_itens_api)}. Licitação ID: {licitacao_id_local}. Abortando salvamento de itens.")
+        logar_falha_persistente("item_api_formato_invalido", lista_itens_api, f"Esperava lista, recebeu {type(lista_itens_api)}")
+        return
+    # ===== FIM DA VALIDAÇÃO =====
+    
     cursor = conn.cursor()
     try:
         # Deletar itens antigos ANTES do loop, uma única vez

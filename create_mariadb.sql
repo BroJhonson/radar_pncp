@@ -63,7 +63,7 @@ CREATE TABLE `itens_licitacao` (
     `descricao` TEXT,
     `materialOuServicoNome` VARCHAR(100),
     `quantidade` DECIMAL(15, 4),
-    `unidadeMedida` VARCHAR(50),
+    `unidadeMedida` VARCHAR(150),
     `valorUnitarioEstimado` DECIMAL(15, 4),
     `valorTotal` DECIMAL(15, 2),
     `orcamentoSigiloso` BOOLEAN,
