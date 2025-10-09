@@ -25,6 +25,9 @@ from logging.handlers import RotatingFileHandler # Para log rotate
 from decimal import Decimal # Para manipular números decimais do banco
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 
+# --- Configurações ---
+app = Flask(__name__, template_folder='templates') # O template_folder agora aponta para 'backend/templates/'
+
 # --- CONFIGURAÇÃO DE LOGGING PARA A APLICAÇÃO FLASK ---
 # Garante que o diretório de logs exista
 if not os.path.exists('logs'):
@@ -50,8 +53,7 @@ app.logger.setLevel(logging.INFO)
 app.logger.info('Aplicação Radar PNCP iniciada')
 # --- FIM DA CONFIGURAÇÃO DE LOGGING ---
 
-# --- Configurações ---
-app = Flask(__name__, template_folder='templates') # O template_folder agora aponta para 'backend/templates/'
+
 # Chave secreta para sessões e flash messages
 app.secret_key = os.getenv('FLASK_SECRET_KEY')
 if not app.secret_key:    
@@ -68,8 +70,9 @@ app.logger.info("FLASK_SECRET_KEY carregada com sucesso do ambiente.")
 AMBIENTE = os.getenv('AMBIENTE', 'desenvolvimento')
 
 if AMBIENTE == 'producao':
-    # Em produção, seja explícito sobre qual frontend pode acessar a API
-    allowed_origins = os.getenv('FRONTEND_URL_PROD')
+    # Pega a string do .env e a transforma em uma lista de URLs
+    allowed_origins_str = os.getenv('FRONTEND_URL_PROD', '')
+    allowed_origins = allowed_origins_str.split(',')
 else:
     # Em desenvolvimento, permita o acesso do servidor de dev do frontend
     allowed_origins = os.getenv('FRONTEND_URL_DEV', 'http://localhost:3000')
@@ -220,7 +223,7 @@ def login():
         conn = get_db_connection()
         if not conn:
             flash("Erro de conexão com o banco de dados.", "danger")
-            return render_template('admin/login.html', page_title="Login")
+            return render_template('login.html', page_title="Login")
 
         cursor = conn.cursor(dictionary=True)
         cursor.execute("SELECT * FROM usuarios WHERE username = %s", (username,))
@@ -236,7 +239,7 @@ def login():
             flash('Login inválido.', 'danger')
     
     # Lembre-se de mover seu login.html para templates/admin/
-    return render_template('admin/login.html', page_title="Login")
+    return render_template('login.html', page_title="Login")
 
 @app.route('/logout')
 def logout():
@@ -250,7 +253,7 @@ def logout():
 def pagina_nao_encontrada(e):
     # Se a requisição for para a API, retorna JSON. Senão, pode ser para o admin.
     if request.path.startswith('/api/'):
-        return jsonify(error=404, text="Recurso não encontrado"), 404
+        return jsonify({"erro": "Recurso não encontrado", "status_code": 404}), 404
     # Para o admin, renderiza a página de erro do admin (se houver) ou redireciona
     return render_template('admin/404.html'), 404 # Supondo que você tenha um template 404 para o admin
 
