@@ -1,6 +1,7 @@
 # python sync_api.py
 # Essa é a parte principal do backend que lida com a sincronização das licitações do PNCP com o banco de dados local. 
-
+import fcntl
+import sys
 import mysql.connector
 from mysql.connector import errors # (Para tratamento de erros de conexão e SQL)
 import requests # (Para fazer requisições HTTP)
@@ -85,6 +86,7 @@ CODIGOS_MODALIDADE = [1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO)
 DIAS_JANELA_SINCRONIZACAO = 365 #Periodo da busca
 API_BASE_URL = "https://pncp.gov.br/api/consulta" # (URL base da API do PNCP)      
 API_BASE_URL_PNCP_API = "https://pncp.gov.br/pncp-api"   # Para itens e arquivos    ## PARA TODOS OS LINKS DE ARQUIVOS E ITENS USAR PAGINAÇÃO SE NECESSARIO ##
+MAX_CONSECUTIVE_API_FAILURES = 10 # Heurística para o disjuntor de segurança. Se houver mais que esse número de falhas consecutivas, o script aborta e pula a pagina.
 # ======= Fim das Configurações do Processamento das Licitações ============================== #
 
 # ===== Validação de Dados da Licitação para decidir se continua a buscar a licitação especifca ou não ===== 
@@ -378,34 +380,39 @@ def fetch_licitacoes_por_atualizacao(data_inicio_str, data_fim_str, codigo_modal
         'codigoModalidadeContratacao': codigo_modalidade_api
     }
     url_api_pncp = f"{API_BASE_URL}/v1/contratacoes/atualizacao"
-    logger.info(f"SYNC_API: Buscando em {url_api_pncp} com params {params_api}") # INFO aqui é bom para o fluxo principal
+    logger.info(f"SYNC_API: Buscando em {url_api_pncp} com params {params_api}")
+
     try:
-        response = requests.get(url_api_pncp, params=params_api, timeout=120) # Timeout maior para esta API principal
-        response.raise_for_status()
-        if response.status_code == 204: # Improvável para esta API, mas para consistência
+        response = requests.get(url_api_pncp, params=params_api, timeout=120)
+        response.raise_for_status() # Levanta HTTPError para status 4xx/5xx
+        
+        if response.status_code == 204:
             logger.info(f"SYNC_API: Recebido status 204 (No Content) para {url_api_pncp} com params {params_api}.")
-            return None, 0 # (data, paginasRestantes)
+            return None, 0
+        
         data_api = response.json()
         return data_api.get('data'), data_api.get('paginasRestantes', 0)
+
     except requests.exceptions.HTTPError as http_err:
-        # CORREÇÃO: Verifica se o erro DEVE ser retentado. Se sim, RELANÇA a exceção.
+        # PRIMEIRO, verifica se o erro HTTP deve acionar uma retentativa (ex: 500, 503)
         if should_retry_http_error(http_err):
             logger.warning(f"SYNC_API: Erro HTTP retentável {http_err.response.status_code} detectado. Deixando 'tenacity' tratar.")
-            raise http_err # <-- Essencial para acionar a retentativa
-        
-        # Se não for retentável (ex: 404 Not Found), loga como erro final e continua.
+            raise http_err  # <-- IMPORTANTE: Relança a exceção para o decorador
+
+        # Se não for retentável (ex: 404 Not Found), loga como erro final e retorna falha.
         logger.error(f"SYNC_API: Erro HTTP NÃO RETENTÁVEL (modalidade {codigo_modalidade_api}, pag {pagina}): {http_err}")
         if http_err.response is not None:
              logger.error(f"SYNC_API: Detalhes da resposta final - Status: {http_err.response.status_code}, Texto: {http_err.response.text[:200]}")
-        return None, 0 # Indica falha não retentável
+        return None, 0
 
     except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as net_err:
-        # CORREÇÃO: Captura exceções de rede e as relança para o decorador 'tenacity'.
+        # SEGUNDO, captura exceções de rede específicas que SEMPRE devem ser retentadas.
         logger.warning(f"SYNC_API: Erro de rede retentável ({type(net_err).__name__}) detectado. Deixando 'tenacity' tratar.")
-        raise net_err # <-- Essencial para acionar a retentativa
+        raise net_err  # <-- IMPORTANTE: Relança a exceção para o decorador
 
     except Exception as e:
-        # Este bloco agora só vai capturar erros verdadeiramente inesperados (ex: JSONDecodeError)
+        # POR ÚLTIMO, um bloco genérico para erros realmente inesperados (ex: erro de JSON).
+        # Estes não serão retentados.
         logger.exception(f"SYNC_API: Erro GERAL INESPERADO (não-requests) ao buscar (modalidade {codigo_modalidade_api}, pag {pagina})")
         return None, 0
 
@@ -750,28 +757,43 @@ def fetch_all_itens_for_licitacao_APENAS_BUSCA(cnpj_orgao, ano_compra, sequencia
     return todos_itens_api
 
 
-# Função para salvar itens no banco (separada da busca)
+
+# Função defensiva para extrair valores primitivos (Valores primitivos é str, int, float, bool, None)
+def get_primitive_value(data, key, sub_key='nome'):
+    """
+    Extrai um valor primitivo de um dicionário. Se o valor for um outro dicionário,
+    tenta extrair o valor da 'sub_key' (padrão 'nome').
+    Isso protege contra inconsistências na API.
+    """
+    value = data.get(key)
+    if isinstance(value, dict):
+        # Se o valor for um dicionário, tentamos pegar a sub-chave
+        return value.get(sub_key)
+    
+    # Se já for um tipo primitivo (ou None), retorna diretamente
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    
+    # Se for um tipo complexo inesperado (lista, etc.), retorna None para evitar erros
+    logger.warning(f"ITENS_SAVE: Valor inesperado do tipo {type(value)} para a chave '{key}'. Convertendo para None. Valor: {value}")
+    return None
+
+# Função que salva os itens no banco de dados
 def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
     if not lista_itens_api:
-        logger.info(f"ITENS_SAVE: Sem itens para salvar para licitação ID {licitacao_id_local}.") # Mudado para INFO
+        logger.info(f"ITENS_SAVE: Sem itens para salvar para licitação ID {licitacao_id_local}.")
         return
 
-     # ===== VALIDAÇÃO ADICIONADA =====
     if not isinstance(lista_itens_api, list):
-        logger.error(f"ITENS_SAVE: ERRO DE TIPO DE DADO. Esperava uma lista de itens, mas recebeu {type(lista_itens_api)}. Licitação ID: {licitacao_id_local}. Abortando salvamento de itens.")
-        logar_falha_persistente("item_api_formato_invalido", lista_itens_api, f"Esperava lista, recebeu {type(lista_itens_api)}")
+        logger.error(f"ITENS_SAVE: ERRO DE TIPO DE DADO. Esperava uma lista, recebeu {type(lista_itens_api)}. Licitação ID: {licitacao_id_local}.")
         return
-    # ===== FIM DA VALIDAÇÃO =====
     
     cursor = conn.cursor()
     try:
-        # Deletar itens antigos ANTES do loop, uma única vez
-        logger.debug(f"ITENS_SAVE: Garantindo limpeza de itens pré-existentes para licitação ID {licitacao_id_local} antes de inserir novos.")
+        logger.debug(f"ITENS_SAVE: Limpando itens pré-existentes para licitação ID {licitacao_id_local}.")
         cursor.execute("DELETE FROM itens_licitacao WHERE licitacao_id = %s", (licitacao_id_local,))
-        if cursor.rowcount > 0:
-            logger.debug(f"ITENS_SAVE: {cursor.rowcount} itens antigos foram efetivamente deletados para licitação ID {licitacao_id_local}.")
     except mysql.connector.Error as e:
-        logger.exception(f"ITENS_SAVE: Erro MariaDB ao tentar limpar itens antigos (lic_id {licitacao_id_local})")
+        logger.exception(f"ITENS_SAVE: Erro MariaDB ao limpar itens antigos (lic_id {licitacao_id_local})")
         return
 
     sql_insert_item = """
@@ -781,34 +803,34 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
         itemCategoriaNome, categoriaItemCatalogo, criterioJulgamentoNome,
         situacaoCompraItemNome, tipoBeneficioNome, incentivoProdutivoBasico, dataInclusao,
         dataAtualizacao, temResultado, informacaoComplementar
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""" # 19 placeholders
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
 
-    # 1. Preparar a lista de tuplas para executemany()
     itens_para_inserir = []
     itens_com_dados_invalidos = 0
 
     for item_api in lista_itens_api:
-        # Validação básica de dados do item (opcional, mas bom)
-        if item_api.get('numeroItem') is None: # Exemplo de validação
-            logger.warning(f"ITENS_SAVE: Item para lic_id {licitacao_id_local} sem 'numeroItem'. Pulando item: {item_api}")
-            itens_com_dados_invalidos +=1
+        if item_api.get('numeroItem') is None:
+            logger.warning(f"ITENS_SAVE: Item para lic_id {licitacao_id_local} sem 'numeroItem'. Pulando: {item_api}")
+            itens_com_dados_invalidos += 1
             continue
 
         item_db_tuple = (
             licitacao_id_local,
             item_api.get('numeroItem'),
             item_api.get('descricao'),
-            item_api.get('materialOuServicoNome'),
+            # --- APLICAÇÃO DA CORREÇÃO DEFENSIVA ---
+            get_primitive_value(item_api, 'materialOuServicoNome'),
             item_api.get('quantidade'),
-            item_api.get('unidadeMedida'),
+            get_primitive_value(item_api, 'unidadeMedida'),
             item_api.get('valorUnitarioEstimado'),
             item_api.get('valorTotal'),
             bool(item_api.get('orcamentoSigiloso')),
-            item_api.get('itemCategoriaNome'),
-            item_api.get('categoriaItemCatalogo'),
-            item_api.get('criterioJulgamentoNome'),
-            item_api.get('situacaoCompraItemNome'),
-            item_api.get('tipoBeneficioNome'),
+            get_primitive_value(item_api, 'itemCategoriaNome'),
+            item_api.get('categoriaItemCatalogo'), # Geralmente é um código (int/str), mas podemos proteger se necessário
+            get_primitive_value(item_api, 'criterioJulgamentoNome'),
+            get_primitive_value(item_api, 'situacaoCompraItemNome'),
+            get_primitive_value(item_api, 'tipoBeneficioNome'),
+            # --- FIM DA APLICAÇÃO ---
             bool(item_api.get('incentivoProdutivoBasico')),
             item_api.get('dataInclusao', '').split('T')[0] if item_api.get('dataInclusao') else None,
             item_api.get('dataAtualizacao', '').split('T')[0] if item_api.get('dataAtualizacao') else None,
@@ -818,31 +840,43 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
         itens_para_inserir.append(item_db_tuple)
 
     if itens_com_dados_invalidos > 0:
-        logger.warning(f"ITENS_SAVE: {itens_com_dados_invalidos} itens foram pulados devido a dados inválidos para lic_id {licitacao_id_local}.")
+        logger.warning(f"ITENS_SAVE: {itens_com_dados_invalidos} itens pulados por dados inválidos para lic_id {licitacao_id_local}.")
 
-    # 2. Executar a inserção em lote se houver itens válidos
     if itens_para_inserir:
         try:
             cursor.executemany(sql_insert_item, itens_para_inserir)
-            # conn.commit() # O commit principal geralmente é feito na função que chama esta (save_licitacao_to_db)
             logger.info(f"ITENS_SAVE: {cursor.rowcount} itens inseridos em lote para licitação ID {licitacao_id_local}.")
-            if cursor.rowcount != len(itens_para_inserir):
-                 logger.warning(f"ITENS_SAVE: Esperava-se inserir {len(itens_para_inserir)} itens, mas {cursor.rowcount} foram afetados para lic_id {licitacao_id_local}.")
         except mysql.connector.Error as e:
             logger.exception(f"ITENS_SAVE: Erro no Banco de Dados durante executemany para licitação ID {licitacao_id_local}")
-            # Logar os primeiros N itens para ajudar na depuração, se necessário
-            logger.debug(f"ITENS_SAVE: Primeiros itens na tentativa de lote (max 5): {itens_para_inserir[:5]}")
-    elif not itens_com_dados_invalidos: # Se não há itens para inserir e nenhum foi invalidado
-        logger.info(f"ITENS_SAVE: Nenhum item válido encontrado na lista para inserir para lic_id {licitacao_id_local}.")
+            logger.debug(f"ITENS_SAVE: Primeiros itens na tentativa de lote (max 2): {itens_para_inserir[:2]}")
 
     
+# SUGESTÃO 2+5: Função para logar páginas que falharam em um arquivo .jsonl
+def logar_pagina_falha(modalidade, pagina, data_inicio, data_fim, motivo):
+    """Loga os parâmetros de uma página que falhou em um arquivo .jsonl para reprocessamento."""
+    try:
+        falha = {
+            "timestamp": datetime.now().isoformat(),
+            "motivo": motivo,
+            "modalidade": modalidade,
+            "pagina": pagina,
+            "data_inicio": data_inicio,
+            "data_fim": data_fim
+        }
+        # Usamos um arquivo dedicado para facilitar o reprocessamento automático
+        with open("failed_pages.jsonl", "a", encoding='utf-8') as f:
+            f.write(json.dumps(falha, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.error(f"DLQ_FAIL: Falha ao tentar logar página com erro em failed_pages.jsonl: {e}")
+
+# Função para logar falhas persistentes em um arquivo .jsonl. E para buscar depois.
 def sync_licitacoes_ultima_janela_anual():
     conn = get_db_connection()
     if not conn: return
 
     agora = datetime.now()
     data_fim_periodo_dt = agora
-    data_inicio_periodo_dt = agora - timedelta(days=DIAS_JANELA_SINCRONIZACAO) # Quantos dias considerar para a janela de sincronização
+    data_inicio_periodo_dt = agora - timedelta(days=DIAS_JANELA_SINCRONIZACAO)
 
     data_inicio_api_str = format_datetime_for_api(data_inicio_periodo_dt)
     data_fim_api_str = format_datetime_for_api(data_fim_periodo_dt)
@@ -855,7 +889,7 @@ def sync_licitacoes_ultima_janela_anual():
         logger.info(f"\n--- SYNC JANELA: Processando Modalidade {modalidade_id_sync} ---")
         pagina_atual = 1
         paginas_processadas_modalidade = 0
-        erros_api_modalidade = 0
+        erros_consecutivos_api = 0 
 
         while True:
             if LIMITE_PAGINAS_TESTE_SYNC is not None and paginas_processadas_modalidade >= LIMITE_PAGINAS_TESTE_SYNC:
@@ -866,46 +900,73 @@ def sync_licitacoes_ultima_janela_anual():
                 data_inicio_api_str, data_fim_api_str, modalidade_id_sync, pagina_atual
             )
 
-            if licitacoes_data is None: # Erro
-                erros_api_modalidade += 1
-                if erros_api_modalidade > 4:
-                    logger.critical(f"SYNC JANELA: Muitos erros de API para modalidade {modalidade_id_sync}. Abortando esta modalidade.")
-                    break 
-                if paginas_restantes == 0 : # Se API indicou erro e fim
-                    logger.critical(f"SYNC JANELA: Muitos erros de API para modalidade {modalidade_id_sync}.")
+            if licitacoes_data is None:
+                erros_consecutivos_api += 1
+                motivo_falha = f"API retornou erro na página {pagina_atual} da modalidade {modalidade_id_sync}"
+                logger.error(motivo_falha + ", após todas as retentativas.")
+                
+                # SUGESTÃO 2+5: Loga a página com falha para auditoria/reprocessamento
+                logar_pagina_falha(modalidade_id_sync, pagina_atual, data_inicio_api_str, data_fim_api_str, motivo_falha)
+                
+                # SUGESTÃO 1: Usa a constante para o disjuntor de segurança
+                if erros_consecutivos_api >= MAX_CONSECUTIVE_API_FAILURES:
+                    logger.critical(f"CIRCUIT BREAKER: {erros_consecutivos_api} falhas consecutivas de API. Abortando a modalidade {modalidade_id_sync} por segurança.")
                     break
-    
-            if not licitacoes_data: # Fim dos dados
-                logger.info(f"SYNC JANELA: Nenhuma licitação na API para modalidade {modalidade_id_sync}, página {pagina_atual}.")
-                # Verifique se paginas_restantes é 0 para confirmar o fim
-                if paginas_restantes == 0:
-                    break
-                else: # Pode ser uma página vazia no meio, mas API indica mais páginas (raro)
-                    logger.info(f"SYNC ANUAL: Página {pagina_atual} vazia, mas {paginas_restantes} páginas restantes. Tentando próxima.")
-                    pagina_atual += 1
-                    time.sleep(0.5)
-                    continue
 
+                # SUGESTÃO 3: Log explícito sobre a ação de pular a página
+                logger.warning(f"Avançando para a próxima página da modalidade {modalidade_id_sync}...")
+                pagina_atual += 1
+                time.sleep(1)
+                continue
+
+            erros_consecutivos_api = 0
+            
+            if not licitacoes_data:
+                logger.info(f"SYNC JANELA: Fim dos dados para modalidade {modalidade_id_sync} na página {pagina_atual} (página vazia).")
+                break
+            
             logger.info(f"SYNC JANELA: Modalidade {modalidade_id_sync}, Página {pagina_atual}: Processando {len(licitacoes_data)} licitações.")
             for lic_api in licitacoes_data:
-                save_licitacao_to_db(conn, lic_api) # Removido o set 
-                licitacoes_processadas_total += 1
+                try:
+                    save_licitacao_to_db(conn, lic_api)
+                    conn.commit()
+                except mysql.connector.Error as db_err:
+                    logger.error(f"Falha ao processar licitação {lic_api.get('numeroControlePNCP')}: {db_err}. Rollback executado.")
+                    conn.rollback()
+                except Exception as e:
+                    logger.error(f"Erro inesperado ao processar licitação {lic_api.get('numeroControlePNCP')}: {e}. Rollback executado.")
+                    conn.rollback()
             
-            conn.commit()
-            logger.info(f"SYNC JANELA: Modalidade {modalidade_id_sync}, Página {pagina_atual} processada. {paginas_restantes} páginas restantes.")
-            paginas_processadas_modalidade += 1
+            licitacoes_processadas_total += len(licitacoes_data)
+            paginas_processadas_modalidade += 1 # SUGESTÃO 4: Contador só incrementa em caso de sucesso
             
-            if paginas_restantes == 0: break
+            logger.info(f"SYNC JANELA: Página {pagina_atual} da modalidade {modalidade_id_sync} processada. {paginas_restantes} páginas restantes.")
+            
+            if paginas_restantes == 0:
+                logger.info(f"SYNC JANELA: API indicou ser a última página para a modalidade {modalidade_id_sync}.")
+                break
+            
             pagina_atual += 1
             time.sleep(0.5)
 
-    
     conn.close()
     logger.info(f"\n--- Sincronização da Janela Anual Concluída ---")
-    logger.info(f"Total de licitações da API (na janela de atualização) processadas: {licitacoes_processadas_total}")
+    logger.info(f"Total de licitações da API processadas com sucesso: {licitacoes_processadas_total}")
 
 
 if __name__ == '__main__':
+    # --- MECANISMO DE LOCK PARA IMPEDIR EXECUÇÃO CONCORRENTE ---
+    try:
+        # Tenta criar e obter um lock exclusivo em um arquivo.
+        # O 'f' será fechado automaticamente quando o script terminar, liberando o lock.
+        f = open("sync_api.lock", "w")
+        fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        logger.info("Lock adquirido. Nenhuma outra instância em execução.")
+    except IOError:
+        logger.warning("Outra instância do script já está em execução. Saindo.")
+        sys.exit(0) # Sai silenciosamente
+    # --- FIM DO MECANISMO DE LOCK ---
+
     logger.info(f"Iniciando script de sincronização (janela de {DIAS_JANELA_SINCRONIZACAO} dias de atualizações)...")
     sync_licitacoes_ultima_janela_anual()
     logger.info("Script de sincronização finalizado.")
