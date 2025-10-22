@@ -10,7 +10,7 @@ import os # (Para caminhos de arquivo)
 import time
 from datetime import datetime, date, timedelta # (Para trabalhar com datas)
 import logging 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type # Importar de tenacity para usar Retentativas
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception # Importar de tenacity para usar Retentativas
 from dotenv import load_dotenv # Importe a biblioteca
 
 load_dotenv()
@@ -65,7 +65,7 @@ api_retry_decorator = retry(
     retry=(
         retry_if_exception_type(requests.exceptions.Timeout) |
         retry_if_exception_type(requests.exceptions.ConnectionError) |
-        retry_if_exception_type(should_retry_http_error) # Nossa função customizada para HTTPError
+        retry_if_exception(should_retry_http_error) # Nossa função customizada para HTTPError
     ),
     before_sleep=lambda retry_state: logger.warning(
         f"API_RETRY: Retentativa {retry_state.attempt_number} para {retry_state.fn.__name__} "
@@ -132,7 +132,7 @@ def validar_dados_licitacao_api(licitacao_api_data):
     return True
 
 # --- Configuração do Log de Falhas Persistentes ---
-FAILED_DATA_LOG_PATH = os.path.join(BASE_DIR, 'failed_processing_data.jsonl')
+FAILED_DATA_LOG_PATH = os.path.join(BASE_DIR, 'fail_licitacoes_indv.jsonl')
 
 def logar_falha_persistente(tipo_dado, dado_problematico, motivo_falha):
     """
@@ -895,25 +895,29 @@ def sync_licitacoes_ultima_janela_anual():
             if LIMITE_PAGINAS_TESTE_SYNC is not None and paginas_processadas_modalidade >= LIMITE_PAGINAS_TESTE_SYNC:
                 logger.info(f"SYNC JANELA: Limite de {LIMITE_PAGINAS_TESTE_SYNC} páginas atingido para modalidade {modalidade_id_sync}.")
                 break
-
-            licitacoes_data, paginas_restantes = fetch_licitacoes_por_atualizacao(
-                data_inicio_api_str, data_fim_api_str, modalidade_id_sync, pagina_atual
-            )
+            
+            # --- Bloco de try/except para capturar o erro final do Tenacity ---
+            try:
+                licitacoes_data, paginas_restantes = fetch_licitacoes_por_atualizacao(
+                    data_inicio_api_str, data_fim_api_str, modalidade_id_sync, pagina_atual
+                )
+            except tenacity.RetryError as e: # Captura se todas as retentativas falharem
+                logger.error(f"API_RETRY_FAIL: Todas as retentativas falharam para a página {pagina_atual} da modalidade {modalidade_id_sync}. Causa final: {e}")
+                licitacoes_data = None # Trata como falha para a lógica abaixo
+                paginas_restantes = -1 # Apenas para garantir que o fluxo continue
+            # --- Fim do bloco de captura ---
 
             if licitacoes_data is None:
                 erros_consecutivos_api += 1
                 motivo_falha = f"API retornou erro na página {pagina_atual} da modalidade {modalidade_id_sync}"
                 logger.error(motivo_falha + ", após todas as retentativas.")
                 
-                # SUGESTÃO 2+5: Loga a página com falha para auditoria/reprocessamento
                 logar_pagina_falha(modalidade_id_sync, pagina_atual, data_inicio_api_str, data_fim_api_str, motivo_falha)
                 
-                # SUGESTÃO 1: Usa a constante para o disjuntor de segurança
                 if erros_consecutivos_api >= MAX_CONSECUTIVE_API_FAILURES:
                     logger.critical(f"CIRCUIT BREAKER: {erros_consecutivos_api} falhas consecutivas de API. Abortando a modalidade {modalidade_id_sync} por segurança.")
                     break
 
-                # SUGESTÃO 3: Log explícito sobre a ação de pular a página
                 logger.warning(f"Avançando para a próxima página da modalidade {modalidade_id_sync}...")
                 pagina_atual += 1
                 time.sleep(1)
@@ -926,21 +930,31 @@ def sync_licitacoes_ultima_janela_anual():
                 break
             
             logger.info(f"SYNC JANELA: Modalidade {modalidade_id_sync}, Página {pagina_atual}: Processando {len(licitacoes_data)} licitações.")
-            for lic_api in licitacoes_data:
-                try:
+            
+            # --- INÍCIO DA MELHORIA: COMMIT EM LOTE POR PÁGINA ---
+            try:
+                # Processa todas as licitações da página DENTRO de uma única transação
+                for lic_api in licitacoes_data:
                     save_licitacao_to_db(conn, lic_api)
-                    conn.commit()
-                except mysql.connector.Error as db_err:
-                    logger.error(f"Falha ao processar licitação {lic_api.get('numeroControlePNCP')}: {db_err}. Rollback executado.")
-                    conn.rollback()
-                except Exception as e:
-                    logger.error(f"Erro inesperado ao processar licitação {lic_api.get('numeroControlePNCP')}: {e}. Rollback executado.")
-                    conn.rollback()
+                
+                # O commit só acontece aqui, UMA VEZ para a página inteira
+                conn.commit()
+                
+                # Se o commit foi bem-sucedido, atualizamos os contadores
+                logger.info(f"Página {pagina_atual} da modalidade {modalidade_id_sync} commitada com sucesso.")
+                licitacoes_processadas_total += len(licitacoes_data)
+                paginas_processadas_modalidade += 1
+
+            except (mysql.connector.Error, Exception) as e:
+                # Se QUALQUER licitação na página falhar, a transação inteira é revertida
+                logger.error(f"Falha ao processar o lote da página {pagina_atual}. Rollback executado. Erro: {e}")
+                conn.rollback()
+                # E logamos a PÁGINA INTEIRA como falha para reprocessamento
+                motivo_falha = f"Erro de banco de dados no lote da página {pagina_atual}: {e}"
+                logar_pagina_falha(modalidade_id_sync, pagina_atual, data_inicio_api_str, data_fim_api_str, motivo_falha)
+            # --- FIM DA MELHORIA ---
             
-            licitacoes_processadas_total += len(licitacoes_data)
-            paginas_processadas_modalidade += 1 # SUGESTÃO 4: Contador só incrementa em caso de sucesso
-            
-            logger.info(f"SYNC JANELA: Página {pagina_atual} da modalidade {modalidade_id_sync} processada. {paginas_restantes} páginas restantes.")
+            logger.info(f"SYNC JANELA: Página {pagina_atual} processada. {paginas_restantes} páginas restantes.")
             
             if paginas_restantes == 0:
                 logger.info(f"SYNC JANELA: API indicou ser a última página para a modalidade {modalidade_id_sync}.")
