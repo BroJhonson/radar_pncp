@@ -9,6 +9,8 @@ __pycache__/
 database.db
 sync_api.log
 failed_processing_data.jsonl
+sync_api.lock
+failed_pages.jsonl
 
 logs/
 # Variáveis de Ambiente

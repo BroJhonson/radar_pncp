@@ -367,11 +367,14 @@ def _build_licitacoes_query(filtros):
     
     # Inclusão
     if filtros.get('palavrasChave'):
+        grupo_ou = []  # Guardará blocos de (campo LIKE %palavra%)
         for palavra in filtros['palavrasChave']:
-            # Bloco (campo1 LIKE %p% COLLATE utf8mb4_general_ci OR ...)
             like_exprs = [f"{campo} LIKE %s COLLATE utf8mb4_general_ci" for campo in campos_texto_busca]
-            condicoes_db.append(f"({' OR '.join(like_exprs)})")
+            grupo_ou.append(f"({' OR '.join(like_exprs)})")
             parametros_db.extend([f"%{palavra}%"] * len(campos_texto_busca))
+        # Junta tudo com OR → qualquer palavra
+        condicoes_db.append(f"({' OR '.join(grupo_ou)})")
+
     
     # Exclusão
     if filtros.get('excluirPalavras'):
@@ -455,6 +458,13 @@ def get_licitacoes():
         cursor_dados = conn.cursor(dictionary=True)
         cursor_contagem = conn.cursor(dictionary=True)
 
+        # --- INÍCIO DA MELHORIA: AJUSTE DO NÍVEL DE ISOLAMENTO ---
+        # Definimos o nível de isolamento como READ COMMITTED para esta sessão.
+        # Isso reduz a chance de a leitura bloquear o script de escrita (sync_api.py).
+        cursor_contagem.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        app.logger.info("Nível de isolamento da transação para API de leitura definido como READ COMMITTED.")
+        # --- FIM DA MELHORIA ---
+        
         # Executa a query de contagem total
         cursor_contagem.execute(query_contagem, parametros_db)
         resultado_contagem = cursor_contagem.fetchone()
@@ -466,8 +476,8 @@ def get_licitacoes():
         cursor_dados.execute(query_select_dados, parametros_dados_sql)
         licitacoes_lista_bruta = cursor_dados.fetchall()
         
-        # FORMATAÇÃO AQUI
         licitacoes_lista = [formatar_para_json(row) for row in licitacoes_lista_bruta]
+
 
 
     except mysql.connector.Error as err:
