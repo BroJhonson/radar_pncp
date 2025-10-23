@@ -8,9 +8,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session, Response
 import requests  # Para chamar a API do IBGE
 from markupsafe import Markup, escape
+from functools import wraps
 # Para envio de e-mail
 import smtplib
 from email.mime.text import MIMEText
+from pydantic import BaseModel, EmailStr, ValidationError
 import os  # Para ler variáveis de ambiente
 from dotenv import load_dotenv  # Para carregar o arquivo .env
 import csv #Esse e os tres de baixo são para o upload de arquivos CSV
@@ -23,10 +25,19 @@ from flask_cors import CORS
 import logging
 from logging.handlers import RotatingFileHandler # Para log rotate
 from decimal import Decimal # Para manipular números decimais do banco
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 
 # --- Configurações ---
 app = Flask(__name__, template_folder='templates') # O template_folder agora aponta para 'backend/templates/'
+
+# --- Definição do Schema de Validação (Pydantic) ---
+class ContatoSchema(BaseModel):
+    nome_contato: str
+    email_usuario: EmailStr # Valida automaticamente se é um e-mail
+    assunto_contato: str
+    mensagem_contato: str
 
 # --- CONFIGURAÇÃO DE LOGGING PARA A APLICAÇÃO FLASK ---
 # Garante que o diretório de logs exista
@@ -53,6 +64,14 @@ app.logger.setLevel(logging.INFO)
 app.logger.info('Aplicação Radar PNCP iniciada')
 # --- FIM DA CONFIGURAÇÃO DE LOGGING ---
 
+# --- INÍCIO DA CONFIGURAÇÃO DO RATE LIMITER ---
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"], # Limite padrão para todas as rotas
+    storage_uri="memory://" # Use 'memory://' ou configure um Redis
+)
+# --- FIM DA CONFIGURAÇÃO DO RATE LIMITER ---
 
 # Chave secreta para sessões e flash messages
 app.secret_key = os.getenv('FLASK_SECRET_KEY')
@@ -126,6 +145,39 @@ def get_db_connection(max_retries=3, delay=2):
             break
     app.logger.error("Falha ao conectar ao banco de dados após múltiplas tentativas.")
     return None
+
+def with_db_cursor(func):
+    """
+    Decorator para gerenciar automaticamente conexões e cursores de banco de dados
+    para rotas de API (leitura) que retornam JSON.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        conn = None
+        cursor = None
+        try:
+            conn = get_db_connection()
+            if not conn:
+                app.logger.error(f"Falha de conexão em {func.__name__}")
+                return jsonify(erro="Falha de conexão com o banco de dados."), 503
+            
+            # Passa o cursor para a função
+            cursor = conn.cursor(dictionary=True)
+            return func(cursor=cursor, *args, **kwargs)
+            
+        except mysql.connector.Error as err:
+            app.logger.error(f"Erro de DB em {func.__name__}: {err}")
+            # Não precisa de rollback() pois é para rotas GET (leitura)
+            return jsonify(erro="Erro interno no banco de dados."), 500
+        except Exception as e:
+            app.logger.error(f"Erro inesperado em {func.__name__}: {e}")
+            return jsonify(erro="Erro interno inesperado no servidor."), 500
+        finally:
+            if cursor:
+                cursor.close()
+            if conn and conn.is_connected():
+                conn.close()
+    return wrapper
 
 # --- Função para formatar um dicionário para JSON (datas e números) ---
 def formatar_para_json(dicionario):
@@ -213,6 +265,7 @@ def load_user(user_id):
 # ROTAS DE AUTENTICAÇÃO E ADMINISTRAÇÃO de USUÁRIOS
 # =========================================================================
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute") # Limite específico para esta rota (previne força bruta)
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('admin.index'))
@@ -268,15 +321,26 @@ def erro_interno_servidor(e):
 
 # --- Rota para Processar o Formulário de Contato ---
 @app.route('/api/contato', methods=['POST'])
+@limiter.limit("5 per hour") # Limite específico para esta rota (previne spam)
 def api_processar_contato():
     data = request.json
-    nome = data.get('nome_contato')
-    email_usuario = data.get('email_usuario')
-    assunto = data.get('assunto_contato')
-    mensagem = data.get('mensagem_contato')
 
-    if not all([nome, email_usuario, assunto, mensagem]):
-        return jsonify({'status': 'erro', 'mensagem': 'Todos os campos são obrigatórios.'}), 400
+    # Validação dos dados usando Pydantic. a ideia é garantir que os dados estejam corretos antes de prosseguir, alem de evitar injeção de código.
+    try:
+        # 1. Valida os dados de entrada usando o schema
+        contato_data = ContatoSchema(**data)
+        
+        # 2. Usa os dados validados e limpos
+        nome = contato_data.nome_contato
+        email_usuario = contato_data.email_usuario # Agora é garantido ser um e-mail válido
+        assunto = contato_data.assunto_contato
+        mensagem = contato_data.mensagem_contato
+
+    except ValidationError as e:
+        # Se a validação falhar, retorna um erro 400 claro
+        app.logger.warning(f"API Contato: Falha de validação. Dados: {data}. Erro: {e.errors()}")
+        return jsonify({'status': 'erro', 'mensagem': 'Dados inválidos.', 'detalhes': e.errors()}), 400
+    # --- FIM DA VALIDAÇÃO ---
 
     email_remetente = os.getenv('EMAIL_REMETENTE')
     senha_remetente = os.getenv('SENHA_EMAIL_REMETENTE')
@@ -506,15 +570,13 @@ def get_licitacoes():
 
 
 @app.route('/api/licitacao/<path:numero_controle_pncp>', methods=['GET'])
-def get_detalhe_licitacao(numero_controle_pncp):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+@with_db_cursor
+def get_detalhe_licitacao(numero_controle_pncp, cursor):
     query_licitacao_principal = "SELECT * FROM licitacoes WHERE numeroControlePNCP = %s"
     cursor.execute(query_licitacao_principal, (numero_controle_pncp,))
     licitacao_principal_row = cursor.fetchone()
 
     if not licitacao_principal_row:
-        conn.close()
         return jsonify({"erro": "Licitação não encontrada", "numeroControlePNCP": numero_controle_pncp}), 404
 
     licitacao_principal_dict = formatar_para_json(licitacao_principal_row)
@@ -530,43 +592,34 @@ def get_detalhe_licitacao(numero_controle_pncp):
     arquivos_rows = cursor.fetchall()
     arquivos_lista = [formatar_para_json(row) for row in arquivos_rows]
 
-    conn.close()
-
     resposta_final = {
         "licitacao": licitacao_principal_dict,
         "itens": itens_lista,
         "arquivos": arquivos_lista
     }
     return jsonify(resposta_final)
-    #return jsonify({ "exemplo": f"dados da licitacao {numero_controle_pncp}" }) # Placeholder
 
 @app.route('/api/referencias/modalidades', methods=['GET'])
-def get_modalidades_referencia():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+@with_db_cursor
+def get_modalidades_referencia(cursor):
     cursor.execute("SELECT DISTINCT modalidadeId, modalidadeNome FROM licitacoes ORDER BY modalidadeNome")
     modalidades = [dict(row) for row in cursor.fetchall()]
-    conn.close()
     return jsonify(modalidades)
 
 @app.route('/api/referencias/statuscompra', methods=['GET'])
-def get_statuscompra_referencia():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+@with_db_cursor
+def get_statuscompra_referencia(cursor):
     cursor.execute("SELECT DISTINCT situacaoCompraId, situacaoCompraNome FROM licitacoes ORDER BY situacaoCompraNome")
     status_compra = [dict(row) for row in cursor.fetchall()]
-    conn.close()
     return jsonify(status_compra)
 
 @app.route('/api/referencias/statusradar', methods=['GET'])
-def get_statusradar_referencia():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+@with_db_cursor
+def get_statusradar_referencia(cursor):
     cursor.execute("SELECT DISTINCT situacaoReal FROM licitacoes WHERE situacaoReal IS NOT NULL ORDER BY situacaoReal")
     status_radar_rows = cursor.fetchall()
     status_radar = [{"id": row['situacaoReal'], "nome": row['situacaoReal']} for row in status_radar_rows]
-    conn.close()
-    return jsonify(status_radar)    
+    return jsonify(status_radar)
 
 # --- Rota API IBGE (mantida do frontend) ---
 @app.route('/api/ibge/municipios/<uf_sigla>', methods=['GET'])
@@ -616,6 +669,24 @@ def exportar_csv():
     # Coleta parâmetros de ordenação
     orderBy_param = request.args.get('orderBy', default='dataPublicacaoPncp')
     orderDir_param = request.args.get('orderDir', default='DESC').upper()
+
+    # --- INÍCIO DA CORREÇÃO DE SEGURANÇA ---
+    # Reutilize a MESMA whitelist da sua rota get_licitacoes
+    campos_validos_ordenacao = [
+        'dataPublicacaoPncp', 'dataAtualizacao', 'valorTotalEstimado',
+        'dataAberturaProposta', 'dataEncerramentoProposta', 'modalidadeNome',
+        'orgaoEntidadeRazaoSocial', 'unidadeOrgaoMunicipioNome', 'situacaoReal'
+    ]
+    if orderBy_param not in campos_validos_ordenacao:
+        app.logger.warning(f"Export CSV: Tentativa de ordenação inválida por '{orderBy_param}'")
+        # Retorna um erro em vez de continuar
+        return jsonify({"erro": "Parâmetro de ordenação inválido."}), 400
+        
+    if orderDir_param not in ['ASC', 'DESC']:
+        app.logger.warning(f"Export CSV: Tentativa de direção de ordenação inválida '{orderDir_param}'")
+        return jsonify({"erro": "Parâmetro de direção de ordenação inválido."}), 400
+    # --- FIM DA CORREÇÃO DE SEGURANÇA ---
+
 
     # 2. Usa a função central para construir a cláusula WHERE e os parâmetros
     query_where_sql, parametros_db_sql = _build_licitacoes_query(filtros)
@@ -681,14 +752,9 @@ def exportar_csv():
 # =================== Rotas para posts do blog ==================
 # ===============================================================
 @app.route('/api/posts', methods=['GET'])
-def get_all_posts():
-    conn = get_db_connection()
-    if not conn: 
-        return jsonify(erro="Falha de conexão com o banco"), 500
-    
-    cursor = conn.cursor(dictionary=True)
-
-    # --- 1. Captura de todos os parâmetros ---
+@with_db_cursor
+def get_all_posts(cursor):
+    # --- 1. Captura de todos os parâmetros --- (mantida igual)
     categoria_slug = request.args.get('categoria')
     tag_nome = request.args.get('tag')
     query_busca = request.args.get('q')
@@ -696,7 +762,7 @@ def get_all_posts():
     per_page = 9
     offset = (page - 1) * per_page
 
-    # --- 2. Monta as partes da query (JOINs e WHEREs) primeiro ---
+    # --- 2. Monta as partes da query (JOINs e WHEREs) primeiro --- (mantida igual)
     joins = " LEFT JOIN categorias c ON p.categoria_id = c.id"
     where_clauses = []
     params = []
@@ -719,13 +785,13 @@ def get_all_posts():
     if where_clauses:
         where_sql = " WHERE " + " AND ".join(where_clauses)
 
-    # --- 3. Executa a Query de Contagem (agora correta) ---
+    # --- 3. Executa a Query de Contagem (agora correta) --- (mantida igual)
     count_query = f"SELECT COUNT(DISTINCT p.id) as total FROM posts p{joins}{where_sql}"
     cursor.execute(count_query, params)
     total_posts = cursor.fetchone()['total']
     total_pages = (total_posts + per_page - 1) // per_page if total_posts > 0 else 0
 
-    # --- 4. Executa a Query para buscar os dados da página ---
+    # --- 4. Executa a Query para buscar os dados da página --- (mantida igual)
     query_data = f"""
         SELECT p.id, p.titulo, p.slug, p.resumo, p.data_publicacao, p.imagem_destaque,
                c.nome AS categoria_nome, c.slug AS categoria_slug
@@ -739,12 +805,9 @@ def get_all_posts():
     cursor.execute(query_data, params_paginados)
     posts = cursor.fetchall()
     
-    cursor.close()
-    conn.close()
-
     posts_formatados = [formatar_para_json(p) for p in posts]
     
-    # --- 5. Retorna o JSON com os dados da paginação ---
+    # --- 5. Retorna o JSON com os dados da paginação --- (mantida igual)
     return jsonify(
         posts=posts_formatados,
         pagina_atual=page,
@@ -753,14 +816,9 @@ def get_all_posts():
 
 
 @app.route('/api/post/<string:post_slug>', methods=['GET'])
-def get_single_post(post_slug):
-    conn = get_db_connection()
-    if not conn: 
-        return jsonify(erro="Falha de conexão com o banco"), 500
-
-    cursor = conn.cursor(dictionary=True)
-    
-    # --- PASSO 1: QUERY PRINCIPAL MODIFICADA ---
+@with_db_cursor
+def get_single_post(post_slug, cursor):
+    # --- PASSO 1: QUERY PRINCIPAL MODIFICADA --- (mantida igual)
     # Adicionamos o LEFT JOIN com a tabela 'categorias' para já pegar os dados da categoria.
     query_post = """
         SELECT 
@@ -775,11 +833,9 @@ def get_single_post(post_slug):
     post = cursor.fetchone()
   
     if not post:
-        cursor.close()
-        conn.close()
         return jsonify(erro="Post não encontrado"), 404
 
-    # --- PASSO 2: NOVA QUERY PARA BUSCAR AS TAGS ---
+    # --- PASSO 2: NOVA QUERY PARA BUSCAR AS TAGS --- (mantida igual)
     # Usamos o ID do post que acabamos de encontrar para buscar suas tags.
     post_id = post['id']
     query_tags = """
@@ -794,9 +850,6 @@ def get_single_post(post_slug):
     # Extrai apenas os nomes das tags para uma lista simples
     tags = [tag['nome'] for tag in tags_result]
 
-    cursor.close()
-    conn.close()
-  
     # Formata as datas e adiciona as tags ao resultado final
     post_formatado = formatar_para_json(post)
     post_formatado['tags'] = tags # Adiciona a lista de tags ao dicionário do post
@@ -804,12 +857,9 @@ def get_single_post(post_slug):
     return jsonify(post=post_formatado)
 
 @app.route('/api/posts/destaques', methods=['GET'])
-def get_featured_posts():
-    conn = get_db_connection()
-    if not conn: return jsonify(erro="Falha de conexão com o banco"), 500
-    
-    cursor = conn.cursor(dictionary=True)
-    # ### ALTERAÇÃO NA QUERY: Adicionado "WHERE is_featured = TRUE" e "LIMIT 3" ###
+@with_db_cursor
+def get_featured_posts(cursor):
+    # ### ALTERAÇÃO NA QUERY: Adicionado "WHERE is_featured = TRUE" e "LIMIT 3" ### (mantida igual)
     cursor.execute("""
         SELECT titulo, slug, resumo, data_publicacao, imagem_destaque 
         FROM posts 
@@ -818,8 +868,6 @@ def get_featured_posts():
         LIMIT 3
     """)
     posts = cursor.fetchall()
-    cursor.close()
-    conn.close()
 
     posts_formatados = [formatar_para_json(p) for p in posts]
     return jsonify(posts=posts_formatados)
@@ -1166,25 +1214,17 @@ class TagView(BaseView):
 # =========================================================================
 # =================== Rotas API para categorias e tags ==================
 @app.route('/api/categorias', methods=['GET'])
-def get_all_categorias():
-    conn = get_db_connection()
-    if not conn: return jsonify(erro="Falha de conexão"), 500
-    cursor = conn.cursor(dictionary=True)
+@with_db_cursor
+def get_all_categorias(cursor):
     cursor.execute("SELECT nome, slug FROM categorias ORDER BY nome")
     categorias = cursor.fetchall()
-    cursor.close()
-    conn.close()
     return jsonify(categorias=categorias)
 
 @app.route('/api/tags', methods=['GET'])
-def get_all_tags():
-    conn = get_db_connection()
-    if not conn: return jsonify(erro="Falha de conexão"), 500
-    cursor = conn.cursor(dictionary=True)
+@with_db_cursor
+def get_all_tags(cursor):
     cursor.execute("SELECT nome FROM tags ORDER BY nome")
     tags = cursor.fetchall()
-    cursor.close()
-    conn.close()
     return jsonify(tags=tags)
 # ============================================================================
 
