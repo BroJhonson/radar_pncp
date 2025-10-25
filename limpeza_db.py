@@ -3,12 +3,13 @@ from mysql.connector import errorcode
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import time
 
 # Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
 
 # --- Configurações ---
-DIAS_RETENCAO_LICITACOES = 370 # Manter licitações atualizadas nos últimos 370 dias
+DIAS_RETENCAO_LICITACOES = 365 # Manter licitações atualizadas nos últimos 370 dias
 
 def get_db_connection():
     """Retorna uma conexão com o banco de dados MariaDB."""
@@ -42,21 +43,25 @@ def cleanup_licitacoes_antigas():
     try:
         print(f"LIMPEZA: Iniciando remoção de licitações com dataAtualizacao < {data_limite_str}")
         
-        # O 'ON DELETE CASCADE' definido nas chaves estrangeiras no MariaDB
-        # garante que itens e arquivos associados também sejam removidos.
-        # Usamos %s como placeholder.
-        query_delete = "DELETE FROM licitacoes WHERE dataAtualizacao < %s"
-        
-        cursor.execute(query_delete, (data_limite_str,))
-        deleted_count = cursor.rowcount
-        
-        # Confirma a exclusão dos dados
-        conn.commit()
-        
-        print(f"LIMPEZA: {deleted_count} licitações antigas (e seus itens/arquivos) removidas com sucesso.")
+        total_deleted = 0
+        while True:
+            # DELETA APENAS 1000 LINHAS POR VEZ
+            query_delete = "DELETE FROM licitacoes WHERE dataAtualizacao < %s LIMIT 1000"
+            cursor.execute(query_delete, (data_limite_str,))
+            deleted_count_this_batch = cursor.rowcount
+            conn.commit()
 
-        # A otimização no MariaDB/MySQL é feita com 'OPTIMIZE TABLE'
-        if deleted_count > 0:
+            if deleted_count_this_batch == 0:
+                # Se não deletou nada, significa que terminamos
+                break
+
+            total_deleted += deleted_count_this_batch
+            print(f"LIMPEZA: {deleted_count_this_batch} registros removidos neste lote. Total removido: {total_deleted}.")
+            time.sleep(1) # Pausa de 1 segundo para não sobrecarregar o banco
+
+        print(f"LIMPEZA: {total_deleted} licitações antigas (e seus itens/arquivos) removidas com sucesso.")
+
+        if total_deleted > 0:
             print("LIMPEZA: Otimizando as tabelas (OPTIMIZE TABLE)...")
             # Lista de tabelas que foram afetadas pela exclusão em cascata
             tabelas_para_otimizar = ['licitacoes', 'itens_licitacao', 'arquivos_licitacao']

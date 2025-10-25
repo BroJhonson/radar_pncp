@@ -53,6 +53,7 @@ CREATE TABLE `licitacoes` (
     INDEX `idx_data_atualizacao` (`dataAtualizacao`),
     INDEX `idx_uf_sigla` (`unidadeOrgaoUfSigla`),
     INDEX `idx_modalidade_id` (`modalidadeId`)
+    FULLTEXT KEY `idx_fts_busca` (`objetoCompra`, `orgaoEntidadeRazaoSocial`, `unidadeOrgaoNome`, `numeroControlePNCP`, `unidadeOrgaoMunicipioNome`, `unidadeOrgaoUfNome`, `orgaoEntidadeCnpj`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Tabela de Itens

@@ -82,8 +82,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')
 TAMANHO_PAGINA_SYNC  = 50 # OBRIGATORIO
 LIMITE_PAGINAS_TESTE_SYNC = None # OBRIGATORIO. Mudar para 'None' para buscar todas.
-CODIGOS_MODALIDADE = [1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO)
-DIAS_JANELA_SINCRONIZACAO = 365 #Periodo da busca
+CODIGOS_MODALIDADE = [7, 8, 9, 10, 11, 12, 13] #[1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO) 1) L - Eletrônico, 2) D Competitivo, 3) Concurso, 4) Conc - Eletrônica, 5) Conc - Presencial, 6) P - Eletrônico, 7) P - Presencial, 8) D de Licitação, 9) Inex, 10) Manifestação de Interesse, 11) Pré-qualificação, 12) Credenciamento, 13) Lei - Presencial
+DIAS_JANELA_SINCRONIZACAO = 250 #Periodo da busca
 API_BASE_URL = "https://pncp.gov.br/api/consulta" # (URL base da API do PNCP)      
 API_BASE_URL_PNCP_API = "https://pncp.gov.br/pncp-api"   # Para itens e arquivos    ## PARA TODOS OS LINKS DE ARQUIVOS E ITENS USAR PAGINAÇÃO SE NECESSARIO ##
 MAX_CONSECUTIVE_API_FAILURES = 10 # Heurística para o disjuntor de segurança. Se houver mais que esse número de falhas consecutivas, o script aborta e pula a pagina.
@@ -156,42 +156,35 @@ def logar_falha_persistente(tipo_dado, dado_problematico, motivo_falha):
 # ==== CONFIGURAÇÃO DA API PARA ENCONTRAR OS ITENS/ARQUIVOS DAS LICITAÇÕES ====
 @api_retry_decorator # Decorador para retentativas
 def fetch_itens_from_api(cnpj_orgao, ano_compra, sequencial_compra, pagina=1, tamanho_pagina=TAMANHO_PAGINA_SYNC):
-    """Busca uma página de itens de uma licitação."""
+    """Busca uma página de itens de uma licitação com tratamento de erro robusto."""
     url = f"{API_BASE_URL_PNCP_API}/v1/orgaos/{cnpj_orgao}/compras/{ano_compra}/{sequencial_compra}/itens"
     params = {'pagina': pagina, 'tamanhoPagina': tamanho_pagina}
     headers = {'Accept': 'application/json'}
     logger.debug(f"ITENS_API: Buscando em {url} com params {params}")
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=60) # timeout original da requisição
-        response.raise_for_status() # Isso levantará HTTPError para status 4xx/5xx
+        response = requests.get(url, params=params, headers=headers, timeout=60)
+        response.raise_for_status()
         if response.status_code == 204:
-            logger.debug(f"ITENS_API: Recebido status 204 (No Content) para {url} com params {params}.")
             return []
         return response.json()
+    # --- INÍCIO DA LÓGICA DE EXCEÇÃO CORRIGIDA ---
     except requests.exceptions.HTTPError as http_err:
-        # Este bloco só será atingido se o HTTPError NÃO for um dos que acionam retentativa,
-        # OU se todas as retentativas para um HTTPError retentável falharem.
-        if http_err.response.status_code not in RETRYABLE_STATUS_CODES:
-            logger.error(f"ITENS_API: Erro, HTTP NÃO RETENTÁVEL ou falha em todas as retentativas ao buscar itens para {cnpj_orgao}/{ano_compra}/{sequencial_compra} (Pag: {pagina}): {http_err}")
-        # Se foi retentável e falhou todas as vezes, o log de warning da retentativa já ocorreu.
-        # Podemos logar um erro final aqui.
-        # A tenacity já terá logado os warnings das tentativas.
-        # O logger.error abaixo já cobre o caso de falha final.
-        else:
-            logger.error(f"ITENS_API: Todas as retentativas falharam para HTTPError {http_err.response.status_code} ao buscar itens...")
-        if http_err.response is not None:
-             logger.error(f"ITENS_API: Detalhes da resposta final - Status: {http_err.response.status_code}, Texto: {http_err.response.text[:200]}")
+        if should_retry_http_error(http_err):
+            logger.warning(f"ITENS_API: Erro HTTP retentável {http_err.response.status_code}. Deixando tenacity tratar.")
+            raise http_err # Relança para o decorador
+        logger.error(f"ITENS_API: Erro HTTP NÃO RETENTÁVEL ao buscar itens para {cnpj_orgao}/{ano_compra}/{sequencial_compra}: {http_err}")
         return None
-    except Exception as e: # Outras exceções que não são de requests (ex: json.JSONDecodeError se a resposta não for JSON válido)
-        logger.exception(f"ITENS_API: Erro GERAL (não-requests) ao buscar itens para {cnpj_orgao}/{ano_compra}/{sequencial_compra} (Pag: {pagina})")
+    except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as net_err:
+        logger.warning(f"ITENS_API: Erro de rede retentável ({type(net_err).__name__}). Deixando tenacity tratar.")
+        raise net_err # Relança para o decorador
+    except Exception as e:
+        logger.exception(f"ITENS_API: Erro GERAL INESPERADO ao buscar itens para {cnpj_orgao}/{ano_compra}/{sequencial_compra}")
         return None
-
 
 @api_retry_decorator # Decorador para retentativas    
-def fetch_arquivos_from_api(cnpj_orgao, ano_compra, sequencial_compra, pagina=1, tamanho_pagina=TAMANHO_PAGINA_SYNC ):
-    # """Busca uma página de arquivos de uma licitação específica da API."""
+def fetch_arquivos_from_api(cnpj_orgao, ano_compra, sequencial_compra, pagina=1, tamanho_pagina=TAMANHO_PAGINA_SYNC):
+    """Busca uma página de arquivos de uma licitação com tratamento de erro robusto."""
     url = f"{API_BASE_URL_PNCP_API}/v1/orgaos/{cnpj_orgao}/compras/{ano_compra}/{sequencial_compra}/arquivos"
-
     params = {'pagina': pagina, 'tamanhoPagina': tamanho_pagina}
     headers = {'Accept': 'application/json'}
     logger.debug(f"ARQUIVOS_API: Buscando em {url} com params {params}")
@@ -199,17 +192,20 @@ def fetch_arquivos_from_api(cnpj_orgao, ano_compra, sequencial_compra, pagina=1,
         response = requests.get(url, params=params, headers=headers, timeout=60)
         response.raise_for_status()
         if response.status_code == 204:
-            logger.debug(f"ARQUIVOS_API: Recebido status 204 (No Content) para {url} com params {params}.")
             return []
         return response.json()
+    # --- INÍCIO DA LÓGICA DE EXCEÇÃO CORRIGIDA ---
     except requests.exceptions.HTTPError as http_err:
-        if http_err.response.status_code not in RETRYABLE_STATUS_CODES:
-            logger.error(f"ARQUIVOS_API: Erro HTTP NÃO RETENTÁVEL ao buscar arquivos para {cnpj_orgao}/{ano_compra}/{sequencial_compra} (Pag: {pagina}): {http_err}")
-        if http_err.response is not None:
-             logger.error(f"ARQUIVOS_API: Detalhes da resposta final - Status: {http_err.response.status_code}, Texto: {http_err.response.text[:200]}")
+        if should_retry_http_error(http_err):
+            logger.warning(f"ARQUIVOS_API: Erro HTTP retentável {http_err.response.status_code}. Deixando tenacity tratar.")
+            raise http_err # Relança para o decorador
+        logger.error(f"ARQUIVOS_API: Erro HTTP NÃO RETENTÁVEL ao buscar arquivos para {cnpj_orgao}/{ano_compra}/{sequencial_compra}: {http_err}")
         return None
+    except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as net_err:
+        logger.warning(f"ARQUIVOS_API: Erro de rede retentável ({type(net_err).__name__}). Deixando tenacity tratar.")
+        raise net_err # Relança para o decorador
     except Exception as e:
-        logger.exception(f"ARQUIVOS_API: Erro GERAL (não-requests) ao buscar arquivos para {cnpj_orgao}/{ano_compra}/{sequencial_compra} (Pag: {pagina})")
+        logger.exception(f"ARQUIVOS_API: Erro GERAL INESPERADO ao buscar arquivos para {cnpj_orgao}/{ano_compra}/{sequencial_compra}")
         return None
 
 
@@ -425,6 +421,7 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     
     # MODIFICADO: Usar 'dictionary=True' para acessar colunas por nome
     cursor = conn.cursor(dictionary=True)
+    pncp_id = licitacao_api_item.get('numeroControlePNCP') # Pega o ID para usar nos logs
       
     # Mapeamento de licitacao_db 
     licitacao_db_parcial = { # isso aqui cria o dicionario parcial. Para efeito de comparação simples é como se fosse um SELECT * FROM licitacao WHERE id = ?
@@ -504,6 +501,8 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
         # Comparar datas de atualização para ver se houve mudança real
         db_data_att_val = row_existente['dataAtualizacao']
 
+        logger.debug(f"REGITRO_NO_BANCO_ENCONTRADO ({pncp_id}): Registro já existe. API dataAtt: {api_data_att_dt}, DB dataAtt: {db_data_att_dt}")
+
         # Ajuste: tratar qualquer formato de data vindo do banco
         if isinstance(db_data_att_val, datetime):
             db_data_att_dt = db_data_att_val.date()
@@ -517,9 +516,13 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
         # Só marca como "mudou" se a API tiver data mais recente
         if api_data_att_dt and (not db_data_att_dt or api_data_att_dt > db_data_att_dt):
             flag_houve_mudanca_real = True
+            logger.info(f"OLHANDO_O_BANCO ({pncp_id}): API é MAIS RECENTE. Marcado para ATUALIZAR.")
+        else:
+            logger.debug(f"OLHANDO_O_BANCO ({pncp_id}): DB já está atualizado. PULANDO salvamento principal.")
     else:
         # Não existe no banco → é nova
         flag_houve_mudanca_real = True # Nova licitação, considera como mudança
+        logger.info(f"OLHANDO_O_BANCO ({pncp_id}): Registro NOVO. Marcado para INSERIR.")
 
     # --- Buscar Itens (SEMPRE que houver mudança ou for nova, OU se não tiver itens e quisermos popular) ---    
     itens_da_licitacao_api = [] # Lista de itens buscados da API
@@ -643,14 +646,15 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     INSERT INTO licitacoes ({colunas_str})
     VALUES ({placeholders})
     ON DUPLICATE KEY UPDATE {updates_str}
-    """
-    # FIM DO BLOCO SUBSTITUÍDO    
+    """  
     
     try:
         if flag_houve_mudanca_real:
             # Prepara os parâmetros como uma tupla na ordem correta
             params = tuple(licitacao_db_parcial.values())
             cursor.execute(sql_upsert_licitacao, params)
+
+            logger.debug(f"SALVANDO ({pncp_id}): UPSERT executado.")
             
             # Lógica para obter o ID após INSERT ou UPDATE
             if cursor.lastrowid:
@@ -814,28 +818,33 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
             itens_com_dados_invalidos += 1
             continue
 
+        # --- INÍCIO DA BLINDAGEM COMPLETA DA TUPLA ---
+        # Aplicamos get_primitive_value em TODOS os campos que vêm da API
+        # e não são explicitamente convertidos para outro tipo (como bool).
+        
+        data_inclusao_str = item_api.get('dataInclusao')
+        data_atualizacao_str = item_api.get('dataAtualizacao')
+
         item_db_tuple = (
             licitacao_id_local,
-            item_api.get('numeroItem'),
-            item_api.get('descricao'),
-            # --- APLICAÇÃO DA CORREÇÃO DEFENSIVA ---
+            get_primitive_value(item_api, 'numeroItem'),
+            get_primitive_value(item_api, 'descricao'),
             get_primitive_value(item_api, 'materialOuServicoNome'),
-            item_api.get('quantidade'),
+            get_primitive_value(item_api, 'quantidade'),
             get_primitive_value(item_api, 'unidadeMedida'),
-            item_api.get('valorUnitarioEstimado'),
-            item_api.get('valorTotal'),
+            get_primitive_value(item_api, 'valorUnitarioEstimado'),
+            get_primitive_value(item_api, 'valorTotal'),
             bool(item_api.get('orcamentoSigiloso')),
             get_primitive_value(item_api, 'itemCategoriaNome'),
-            item_api.get('categoriaItemCatalogo'), # Geralmente é um código (int/str), mas podemos proteger se necessário
+            get_primitive_value(item_api, 'categoriaItemCatalogo'),
             get_primitive_value(item_api, 'criterioJulgamentoNome'),
             get_primitive_value(item_api, 'situacaoCompraItemNome'),
             get_primitive_value(item_api, 'tipoBeneficioNome'),
-            # --- FIM DA APLICAÇÃO ---
             bool(item_api.get('incentivoProdutivoBasico')),
-            item_api.get('dataInclusao', '').split('T')[0] if item_api.get('dataInclusao') else None,
-            item_api.get('dataAtualizacao', '').split('T')[0] if item_api.get('dataAtualizacao') else None,
+            data_inclusao_str.split('T')[0] if data_inclusao_str else None,
+            data_atualizacao_str.split('T')[0] if data_atualizacao_str else None,
             bool(item_api.get('temResultado')),
-            item_api.get('informacaoComplementar')
+            get_primitive_value(item_api, 'informacaoComplementar')
         )
         itens_para_inserir.append(item_db_tuple)
 
@@ -848,7 +857,14 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
             logger.info(f"ITENS_SAVE: {cursor.rowcount} itens inseridos em lote para licitação ID {licitacao_id_local}.")
         except mysql.connector.Error as e:
             logger.exception(f"ITENS_SAVE: Erro no Banco de Dados durante executemany para licitação ID {licitacao_id_local}")
-            logger.debug(f"ITENS_SAVE: Primeiros itens na tentativa de lote (max 2): {itens_para_inserir[:2]}")
+            # Log dos dados problemáticos para depuração
+            logger.debug(f"ITENS_SAVE: Dados que causaram a falha (primeiro item): {itens_para_inserir[0]}")
+            # Loga o dado bruto da API no nosso arquivo de DLQ de dados
+            try:
+                logar_falha_persistente("item_api_db_error", lista_itens_api[0], f"InterfaceError: {e}")
+            except Exception as log_err:
+                logger.error(f"Falha ao registrar erro persistente: {log_err}")
+
 
     
 # SUGESTÃO 2+5: Função para logar páginas que falharam em um arquivo .jsonl
