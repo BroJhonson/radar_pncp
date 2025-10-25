@@ -70,7 +70,7 @@ limiter = Limiter(
     get_remote_address,
     app=app,
     default_limits=["200 per day", "50 per hour"], # Limite padrão para todas as rotas
-    storage_uri="memory://" # Use 'memory://' ou configure um Redis
+    storage_uri="redis://localhost:6379" # Use 'memory://' ou configure um Redis
 )
 # --- FIM DA CONFIGURAÇÃO DO RATE LIMITER ---
 
