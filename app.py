@@ -17,6 +17,7 @@ import os  # Para ler variáveis de ambiente
 from dotenv import load_dotenv  # Para carregar o arquivo .env
 import csv #Esse e os tres de baixo são para o upload de arquivos CSV
 import io
+import re
 from flask import Response
 import time
 from datetime import datetime, date
@@ -304,11 +305,16 @@ def logout():
 # Tratamento de erros agora retorna JSON para a API
 @app.errorhandler(404)
 def pagina_nao_encontrada(e):
-    # Se a requisição for para a API, retorna JSON. Senão, pode ser para o admin.
+    # 1. Rotas da API → sempre retornam JSON
     if request.path.startswith('/api/'):
-        return jsonify({"erro": "Recurso não encontrado", "status_code": 404}), 404
-    # Para o admin, renderiza a página de erro do admin (se houver) ou redireciona
-    return render_template('admin/404.html'), 404 # Supondo que você tenha um template 404 para o admin
+        return jsonify({"erro": "Recurso não encontrado","status_code": 404}), 404
+
+    # 2. Rotas do Admin → renderizam o template de admin com a variável necessária
+    if request.path.startswith('/admin'):
+        return render_template('admin/404.html', admin_base_template=admin_base_template), 404
+
+    # 3. Outras rotas (/, /.env, etc.) → retornam JSON para evitar spam de bots
+    return jsonify({"erro": "Página não encontrada", "status_code": 404}), 404
 
 @app.errorhandler(500)
 def erro_interno_servidor(e):
@@ -426,27 +432,49 @@ def _build_licitacoes_query(filtros):
         condicoes_db.append("orgaoEntidadeCnpj = %s")
         parametros_db.append(filtros['cnpjOrgao'])
 
-    # --- Filtros de Texto ---
-    campos_texto_busca = ["objetoCompra", "orgaoEntidadeRazaoSocial", "unidadeOrgaoNome", "numeroControlePNCP", "unidadeOrgaoMunicipioNome", "unidadeOrgaoUfNome", "orgaoEntidadeCnpj"]
     
-    # Inclusão
-    if filtros.get('palavrasChave'):
-        grupo_ou = []  # Guardará blocos de (campo LIKE %palavra%)
-        for palavra in filtros['palavrasChave']:
-            like_exprs = [f"{campo} LIKE %s COLLATE utf8mb4_general_ci" for campo in campos_texto_busca]
-            grupo_ou.append(f"({' OR '.join(like_exprs)})")
-            parametros_db.extend([f"%{palavra}%"] * len(campos_texto_busca))
-        # Junta tudo com OR → qualquer palavra
-        condicoes_db.append(f"({' OR '.join(grupo_ou)})")
+    # --- Filtros de Texto com FULLTEXT SEARCH (Lógica OU e Exclusão) ---
+    search_terms = []
 
-    
+    # Inclusão (Lógica OU)
+    if filtros.get('palavrasChave'):
+        # O modo booleano do FTS sem operadores (+, -) funciona como um OR por padrão.
+        # Apenas juntamos as palavras com espaços. Ex: "consultoria software"
+        # Isso encontrará documentos que contenham 'consultoria' OU 'software'.
+        search_terms.extend(filtros['palavrasChave'])
+
     # Exclusão
     if filtros.get('excluirPalavras'):
-        for palavra in filtros['excluirPalavras']:
-            # Bloco NOT (campo1 LIKE %p% COLLATE utf8mb4_general_ci OR ...)
-            like_exprs = [f"{campo} LIKE %s COLLATE utf8mb4_general_ci" for campo in campos_texto_busca]
-            condicoes_db.append(f"NOT ({' OR '.join(like_exprs)})")
-            parametros_db.extend([f"%{palavra}%"] * len(campos_texto_busca))
+        # Adicionamos o operador '-' na frente de cada palavra de exclusão.
+        # Ex: "-licitação -cancelada"
+        search_terms.extend([f"-{palavra}" for palavra in filtros['excluirPalavras']])
+
+    # Se houver qualquer termo de busca (inclusão ou exclusão), montamos a query
+    if search_terms:
+        # --- SANITIZAÇÃO DE CARACTERES ---
+        # Regex de caracteres NÃO permitidos.
+        # Remove tudo que NÃO for:
+        #   0-9a-zA-Zá-úÁ-ÚçÇ (letras, números, acentos)
+        #   \-+ (operadores FTS)
+        #   espaço ( )
+        #   @\./_ (separadores comuns)
+        #   " (para frases exatas)
+        #
+        invalid_chars_regex = r'[^0-9a-zA-Zá-úÁ-ÚçÇ\-\+ @\./_"]'
+
+        # Limpa CADA termo individualmente
+        sanitized_terms = [re.sub(invalid_chars_regex, '', term) for term in search_terms]
+
+        # Junta os termos JÁ LIMPOS e filtrados de entradas vazias
+        search_query = ' '.join(filter(None, sanitized_terms))
+
+
+        # Só adiciona a cláusula se a query final não for vazia
+        if search_query:
+            campos_fts = "objetoCompra, orgaoEntidadeRazaoSocial, unidadeOrgaoNome, numeroControlePNCP, unidadeOrgaoMunicipioNome, unidadeOrgaoUfNome, orgaoEntidadeCnpj"
+
+            condicoes_db.append(f"MATCH({campos_fts}) AGAINST (%s IN BOOLEAN MODE)")
+            parametros_db.append(search_query)
 
     query_where = ""
     if condicoes_db:
