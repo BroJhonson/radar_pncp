@@ -55,16 +55,9 @@ def aplicar_indices():
 
     for comando in comandos_sql:
         try:
-            # Modificamos o comando para ignorar erro se já existir
-            # (Ex: "CREATE INDEX" vira "CREATE IGNORE INDEX")
-            if "CREATE INDEX" in comando:
-                comando = comando.replace("CREATE INDEX", "CREATE IGNORE INDEX")
-            elif "ADD FULLTEXT" in comando:
-                # O ALTER TABLE não tem "IGNORE" simples,
-                # então vamos tratar o erro específico
-                pass
-                
-            print(f"Executando: {comando[:80]}...") # Mostra o início do comando
+            # NÃO MODIFICAMOS MAIS O COMANDO AQUI
+            
+            print(f"Executando: {comando[:80]}...")
             cursor.execute(comando)
             conn.commit()
             print("   -> OK!")
@@ -72,7 +65,7 @@ def aplicar_indices():
         except mysql.connector.Error as err:
             if err.errno == 1061: # Código de erro para "Índice duplicado"
                 print(f"   -> AVISO: Índice já existe. (Ignorando erro {err.errno})")
-            elif err.errno == 1060: # Código de erro para "Coluna duplicada" (no caso do FTS)
+            elif err.errno == 1060: # No ALTER TABLE, o erro é "Coluna duplicada" para FTS
                 print(f"   -> AVISO: Índice FTS já existe. (Ignorando erro {err.errno})")
             else:
                 print(f"   -> ERRO: {err}")
