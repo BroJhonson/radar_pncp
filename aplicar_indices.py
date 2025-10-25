@@ -55,8 +55,6 @@ def aplicar_indices():
 
     for comando in comandos_sql:
         try:
-            # NÃO MODIFICAMOS MAIS O COMANDO AQUI
-            
             print(f"Executando: {comando[:80]}...")
             cursor.execute(comando)
             conn.commit()
