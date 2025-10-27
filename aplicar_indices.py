@@ -29,7 +29,7 @@ comandos_sql = [
     "CREATE INDEX idx_data_pub ON licitacoes (dataPublicacaoPncp)",
     
     # 7. Índice para filtro por CNPJ
-    "CREATE INDEX idx_cnpj_orgao ON licitacoes (orgaoEntidadeCnpj)"
+    "CREATE INDEX idx_cnpj_orgao ON licitacoes (orgaoEntidadeCnpj)",
 
     # 8. Índice para filtro combinado por Status + Modalidade
     "CREATE INDEX idx_status_modalidade ON licitacoes (situacaoReal, modalidadeId)",
