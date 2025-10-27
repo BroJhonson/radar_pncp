@@ -83,7 +83,7 @@ DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')
 TAMANHO_PAGINA_SYNC  = 50 # OBRIGATORIO
 LIMITE_PAGINAS_TESTE_SYNC = None # OBRIGATORIO. Mudar para 'None' para buscar todas.
 CODIGOS_MODALIDADE = [7, 8, 9, 10, 11, 12, 13] #[1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO) 1) L - Eletrônico, 2) D Competitivo, 3) Concurso, 4) Conc - Eletrônica, 5) Conc - Presencial, 6) P - Eletrônico, 7) P - Presencial, 8) D de Licitação, 9) Inex, 10) Manifestação de Interesse, 11) Pré-qualificação, 12) Credenciamento, 13) Lei - Presencial
-DIAS_JANELA_SINCRONIZACAO = 250 #Periodo da busca
+DIAS_JANELA_SINCRONIZACAO = 60 #Periodo da busca
 API_BASE_URL = "https://pncp.gov.br/api/consulta" # (URL base da API do PNCP)      
 API_BASE_URL_PNCP_API = "https://pncp.gov.br/pncp-api"   # Para itens e arquivos    ## PARA TODOS OS LINKS DE ARQUIVOS E ITENS USAR PAGINAÇÃO SE NECESSARIO ##
 MAX_CONSECUTIVE_API_FAILURES = 10 # Heurística para o disjuntor de segurança. Se houver mais que esse número de falhas consecutivas, o script aborta e pula a pagina.
@@ -254,18 +254,18 @@ def salvar_arquivos_no_banco(conn, licitacao_id_local, lista_arquivos_metadata_a
     Constrói o link de download para cada arquivo.
     """
     if not lista_arquivos_metadata_api: # Se a lista estiver vazia (None ou [])
-        logger.info(f"ARQUIVOS_SAVE: Sem metadados de arquivos para salvar para licitação ID {licitacao_id_local}.") # Mudado para INFO
+        logger.info(f"SALVANDO_ARQUIVOS: Sem metadados de arquivos para salvar para licitação ID {licitacao_id_local}.") # Mudado para INFO
         return # Nada a fazer
 
     cursor = conn.cursor()
     # Deletar arquivos antigos desta licitação antes de (re)inserir
     try:
-        logger.debug(f"ARQUIVOS_SAVE: Garantindo limpeza de arquivos pré-existentes para licitação ID {licitacao_id_local} antes de inserir novos.")
+        logger.debug(f"SALVANDO_ARQUIVOS: Garantindo limpeza de arquivos pré-existentes para licitação ID {licitacao_id_local} antes de inserir novos.")
         cursor.execute("DELETE FROM arquivos_licitacao WHERE licitacao_id = %s", (licitacao_id_local,))
         if cursor.rowcount > 0:
-            logger.debug(f"ARQUIVOS_SAVE: {cursor.rowcount} arquivos antigos foram efetivamente deletados para licitação ID {licitacao_id_local}.")
+            logger.debug(f"SALVANDO_ARQUIVOS: {cursor.rowcount} arquivos antigos foram efetivamente deletados para licitação ID {licitacao_id_local}.")
     except mysql.connector.Error as e:
-        logger.exception(f"ARQUIVOS_SAVE: Erro no Banco de Dados ao tentar limpar arquivos antigos (lic_id {licitacao_id_local})")
+        logger.exception(f"SALVANDO_ARQUIVOS: Erro no Banco de Dados ao tentar limpar arquivos antigos (lic_id {licitacao_id_local})")
         return
 
     sql_insert_arquivo = """
@@ -284,7 +284,7 @@ def salvar_arquivos_no_banco(conn, licitacao_id_local, lista_arquivos_metadata_a
         id_do_documento_api = arquivo_md_api.get('sequencialDocumento')
 
         if not (nome_do_arquivo and id_do_documento_api is not None):
-            logger.warning(f"ARQUIVOS_SAVE: Metadados do arquivo incompletos para lic_id {licitacao_id_local}. Título: {nome_do_arquivo}, ID Doc: {id_do_documento_api}. Pulando arquivo.")
+            logger.warning(f"SALVANDO_ARQUIVOS: Metadados do arquivo incompletos para lic_id {licitacao_id_local}. Título: {nome_do_arquivo}, ID Doc: {id_do_documento_api}. Pulando arquivo.")
             arquivos_com_dados_invalidos +=1
             continue
 
@@ -303,23 +303,23 @@ def salvar_arquivos_no_banco(conn, licitacao_id_local, lista_arquivos_metadata_a
         arquivos_para_inserir.append(arquivo_db_tuple)
 
     if arquivos_com_dados_invalidos > 0:
-        logger.warning(f"ARQUIVOS_SAVE: {arquivos_com_dados_invalidos} arquivos foram pulados devido a dados incompletos para lic_id {licitacao_id_local}.")
+        logger.warning(f"SALVANDO_ARQUIVOS: {arquivos_com_dados_invalidos} arquivos foram pulados devido a dados incompletos para lic_id {licitacao_id_local}.")
 
     # 2. Executar a inserção em lote
     if arquivos_para_inserir:
         try:
             cursor.executemany(sql_insert_arquivo, arquivos_para_inserir)
             # conn.commit() # Commit principal em save_licitacao_to_db
-            logger.info(f"ARQUIVOS_SAVE: {cursor.rowcount} arquivos inseridos/ignorados (ON CONFLICT) em lote para licitação ID {licitacao_id_local}.")
+            logger.info(f"SALVANDO_ARQUIVOS: {cursor.rowcount} arquivos inseridos/ignorados (ON CONFLICT) em lote para licitação ID {licitacao_id_local}.")
             # Para ON CONFLICT DO NOTHING, rowcount pode não ser o número de itens na lista se houver conflitos.
             # Ele geralmente reflete o número de linhas realmente modificadas/inseridas.
             if cursor.rowcount < len(arquivos_para_inserir):
-                logger.info(f"ARQUIVOS_SAVE: {len(arquivos_para_inserir) - cursor.rowcount} arquivos foram ignorados devido a conflito de 'link_download' (UNIQUE) para lic_id {licitacao_id_local}.")
+                logger.info(f"SALVANDO_ARQUIVOS: {len(arquivos_para_inserir) - cursor.rowcount} arquivos foram ignorados devido a conflito de 'link_download' (UNIQUE) para lic_id {licitacao_id_local}.")
         except mysql.connector.Error as e:
-            logger.exception(f"ARQUIVOS_SAVE: Erro no Banco de Dados durante executemany para licitação ID {licitacao_id_local}")
-            logger.debug(f"ARQUIVOS_SAVE: Primeiros arquivos na tentativa de lote (max 5): {arquivos_para_inserir[:5]}")
+            logger.exception(f"SALVANDO_ARQUIVOS: Erro no Banco de Dados durante executemany para licitação ID {licitacao_id_local}")
+            logger.debug(f"SALVANDO_ARQUIVOS: Primeiros arquivos na tentativa de lote (max 5): {arquivos_para_inserir[:5]}")
     elif not arquivos_com_dados_invalidos:
-        logger.info(f"ARQUIVOS_SAVE: Nenhum arquivo válido encontrado na lista para inserir para lic_id {licitacao_id_local}.")
+        logger.info(f"SALVANDO_ARQUIVOS: Nenhum arquivo válido encontrado na lista para inserir para lic_id {licitacao_id_local}.")
 
     
 # Conecta com banco de dados; com retry para erros de conexão.
@@ -779,25 +779,25 @@ def get_primitive_value(data, key, sub_key='nome'):
         return value
     
     # Se for um tipo complexo inesperado (lista, etc.), retorna None para evitar erros
-    logger.warning(f"ITENS_SAVE: Valor inesperado do tipo {type(value)} para a chave '{key}'. Convertendo para None. Valor: {value}")
+    logger.warning(f"SALVANDO_ITENS: Valor inesperado do tipo {type(value)} para a chave '{key}'. Convertendo para None. Valor: {value}")
     return None
 
 # Função que salva os itens no banco de dados
 def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
     if not lista_itens_api:
-        logger.info(f"ITENS_SAVE: Sem itens para salvar para licitação ID {licitacao_id_local}.")
+        logger.info(f"SALVANDO_ITENS: Sem itens para salvar para licitação ID {licitacao_id_local}.")
         return
 
     if not isinstance(lista_itens_api, list):
-        logger.error(f"ITENS_SAVE: ERRO DE TIPO DE DADO. Esperava uma lista, recebeu {type(lista_itens_api)}. Licitação ID: {licitacao_id_local}.")
+        logger.error(f"SALVANDO_ITENS: ERRO DE TIPO DE DADO. Esperava uma lista, recebeu {type(lista_itens_api)}. Licitação ID: {licitacao_id_local}.")
         return
     
     cursor = conn.cursor()
     try:
-        logger.debug(f"ITENS_SAVE: Limpando itens pré-existentes para licitação ID {licitacao_id_local}.")
+        logger.debug(f"SALVANDO_ITENS: Limpando itens pré-existentes para licitação ID {licitacao_id_local}.")
         cursor.execute("DELETE FROM itens_licitacao WHERE licitacao_id = %s", (licitacao_id_local,))
     except mysql.connector.Error as e:
-        logger.exception(f"ITENS_SAVE: Erro MariaDB ao limpar itens antigos (lic_id {licitacao_id_local})")
+        logger.exception(f"SALVANDO_ITENS: Erro MariaDB ao limpar itens antigos (lic_id {licitacao_id_local})")
         return
 
     sql_insert_item = """
@@ -814,7 +814,7 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
 
     for item_api in lista_itens_api:
         if item_api.get('numeroItem') is None:
-            logger.warning(f"ITENS_SAVE: Item para lic_id {licitacao_id_local} sem 'numeroItem'. Pulando: {item_api}")
+            logger.warning(f"SALVANDO_ITENS: Item para lic_id {licitacao_id_local} sem 'numeroItem'. Pulando: {item_api}")
             itens_com_dados_invalidos += 1
             continue
 
@@ -849,16 +849,16 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
         itens_para_inserir.append(item_db_tuple)
 
     if itens_com_dados_invalidos > 0:
-        logger.warning(f"ITENS_SAVE: {itens_com_dados_invalidos} itens pulados por dados inválidos para lic_id {licitacao_id_local}.")
+        logger.warning(f"SALVANDO_ITENS: {itens_com_dados_invalidos} itens pulados por dados inválidos para lic_id {licitacao_id_local}.")
 
     if itens_para_inserir:
         try:
             cursor.executemany(sql_insert_item, itens_para_inserir)
-            logger.info(f"ITENS_SAVE: {cursor.rowcount} itens inseridos em lote para licitação ID {licitacao_id_local}.")
+            logger.info(f"SALVANDO_ITENS: {cursor.rowcount} itens inseridos em lote para licitação ID {licitacao_id_local}.")
         except mysql.connector.Error as e:
-            logger.exception(f"ITENS_SAVE: Erro no Banco de Dados durante executemany para licitação ID {licitacao_id_local}")
+            logger.exception(f"SALVANDO_ITENS: Erro no Banco de Dados durante executemany para licitação ID {licitacao_id_local}")
             # Log dos dados problemáticos para depuração
-            logger.debug(f"ITENS_SAVE: Dados que causaram a falha (primeiro item): {itens_para_inserir[0]}")
+            logger.debug(f"SALVANDO_ITENS: Dados que causaram a falha (primeiro item): {itens_para_inserir[0]}")
             # Loga o dado bruto da API no nosso arquivo de DLQ de dados
             try:
                 logar_falha_persistente("item_api_db_error", lista_itens_api[0], f"InterfaceError: {e}")
@@ -902,14 +902,14 @@ def sync_licitacoes_ultima_janela_anual():
     licitacoes_processadas_total = 0
     
     for modalidade_id_sync in CODIGOS_MODALIDADE:
-        logger.info(f"\n--- SYNC JANELA: Processando Modalidade {modalidade_id_sync} ---")
+        logger.info(f"\n--- SINCRONIZAÇÃO MODALIDADE: Processando Modalidade {modalidade_id_sync} ---")
         pagina_atual = 1
         paginas_processadas_modalidade = 0
         erros_consecutivos_api = 0 
 
         while True:
             if LIMITE_PAGINAS_TESTE_SYNC is not None and paginas_processadas_modalidade >= LIMITE_PAGINAS_TESTE_SYNC:
-                logger.info(f"SYNC JANELA: Limite de {LIMITE_PAGINAS_TESTE_SYNC} páginas atingido para modalidade {modalidade_id_sync}.")
+                logger.info(f"SINCRONIZAÇÃO MODALIDADE: Limite de {LIMITE_PAGINAS_TESTE_SYNC} páginas atingido para modalidade {modalidade_id_sync}.")
                 break
             
             # --- Bloco de try/except para capturar o erro final do Tenacity ---
@@ -942,10 +942,10 @@ def sync_licitacoes_ultima_janela_anual():
             erros_consecutivos_api = 0
             
             if not licitacoes_data:
-                logger.info(f"SYNC JANELA: Fim dos dados para modalidade {modalidade_id_sync} na página {pagina_atual} (página vazia).")
+                logger.info(f"SINCRONIZAÇÃO MODALIDADE: Fim dos dados para modalidade {modalidade_id_sync} na página {pagina_atual} (página vazia).")
                 break
             
-            logger.info(f"SYNC JANELA: Modalidade {modalidade_id_sync}, Página {pagina_atual}: Processando {len(licitacoes_data)} licitações.")
+            logger.info(f"SINCRONIZAÇÃO MODALIDADE: Modalidade {modalidade_id_sync}, Página {pagina_atual}: Processando {len(licitacoes_data)} licitações.")
             
             # --- INÍCIO DA MELHORIA: COMMIT EM LOTE POR PÁGINA ---
             try:
@@ -970,10 +970,10 @@ def sync_licitacoes_ultima_janela_anual():
                 logar_pagina_falha(modalidade_id_sync, pagina_atual, data_inicio_api_str, data_fim_api_str, motivo_falha)
             # --- FIM DA MELHORIA ---
             
-            logger.info(f"SYNC JANELA: Página {pagina_atual} processada. {paginas_restantes} páginas restantes.")
+            logger.info(f"SINCRONIZAÇÃO MODALIDADE: Página {pagina_atual} processada. {paginas_restantes} páginas restantes.")
             
             if paginas_restantes == 0:
-                logger.info(f"SYNC JANELA: API indicou ser a última página para a modalidade {modalidade_id_sync}.")
+                logger.info(f"SINCRONIZAÇÃO MODALIDADE: API indicou ser a última página para a modalidade {modalidade_id_sync}.")
                 break
             
             pagina_atual += 1

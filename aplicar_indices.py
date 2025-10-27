@@ -30,6 +30,9 @@ comandos_sql = [
     
     # 7. Índice para filtro por CNPJ
     "CREATE INDEX idx_cnpj_orgao ON licitacoes (orgaoEntidadeCnpj)"
+
+    # 8. Índice para filtro combinado por Status + Modalidade
+    "CREATE INDEX idx_status_modalidade ON licitacoes (situacaoReal, modalidadeId)",
 ]
 
 def get_db_connection():

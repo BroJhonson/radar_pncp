@@ -7,6 +7,8 @@ charset-normalizer==3.4.2
 click==8.2.1
 colorama==0.4.6
 Deprecated==1.2.18
+dnspython==2.8.0
+email-validator==2.3.0
 Flask==3.1.1
 Flask-Admin==1.6.1
 Flask-Bcrypt==1.0.1
@@ -28,6 +30,7 @@ pydantic==2.12.3
 pydantic_core==2.41.4
 Pygments==2.19.2
 python-dotenv==1.1.0
+redis==7.0.0
 requests==2.32.3
 rich==14.2.0
 tenacity==9.1.2
