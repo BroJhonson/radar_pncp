@@ -488,30 +488,31 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     api_data_att_str = licitacao_db_parcial.get('dataAtualizacao')
     api_data_att_dt = datetime.strptime(api_data_att_str, '%Y-%m-%d').date() if api_data_att_str else None
 
-   # if row_existente:
-   #     licitacao_id_local_final = row_existente['id']  # modificado para dictionary por causa do cursor ser dictionary=True.
-   #     # Comparar datas de atualização para ver se houve mudança real
-   #     db_data_att_str = row_existente['dataAtualizacao']
-   #     db_data_att_dt = datetime.strptime(db_data_att_str, '%Y-%m-%d').date() if db_data_att_str else None
-   #     if api_data_att_dt and (not db_data_att_dt or api_data_att_dt > db_data_att_dt):
-   #         flag_houve_mudanca_real = True
+    # --- INÍCIO DA CORREÇÃO DO UNBOUNDLOCALERROR ---
+    # Inicializamos a variável com um valor padrão ANTES do bloco condicional.
+    db_data_att_dt = None
+    # --- FIM DA CORREÇÃO ---
+
     if row_existente:
         # Já existe → pega ID
         licitacao_id_local_final = row_existente['id']
         # Comparar datas de atualização para ver se houve mudança real
         db_data_att_val = row_existente['dataAtualizacao']
 
-        logger.debug(f"REGITRO_NO_BANCO_ENCONTRADO ({pncp_id}): Registro já existe. API dataAtt: {api_data_att_dt}, DB dataAtt: {db_data_att_dt}")
+        logger.info(f"REGITRO_NO_BANCO_ENCONTRADO ({pncp_id}): Registro já existe. API data: {api_data_att_dt}, DB data: {db_data_att_dt}")
 
-        # Ajuste: tratar qualquer formato de data vindo do banco
         if isinstance(db_data_att_val, datetime):
             db_data_att_dt = db_data_att_val.date()
         elif isinstance(db_data_att_val, date):
             db_data_att_dt = db_data_att_val
         elif isinstance(db_data_att_val, str):
-            db_data_att_dt = datetime.strptime(db_data_att_val, '%Y-%m-%d').date()
+            try:
+                db_data_att_dt = datetime.strptime(db_data_att_val, '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                db_data_att_dt = None # Trata data mal formatada no banco
         else:
-            db_data_att_dt = None
+            db_data_att_dt = None # Já era o padrão, mas deixamos explícito
+
 
         # Só marca como "mudou" se a API tiver data mais recente
         if api_data_att_dt and (not db_data_att_dt or api_data_att_dt > db_data_att_dt):
@@ -911,6 +912,33 @@ def sync_licitacoes_ultima_janela_anual():
             if LIMITE_PAGINAS_TESTE_SYNC is not None and paginas_processadas_modalidade >= LIMITE_PAGINAS_TESTE_SYNC:
                 logger.info(f"SINCRONIZAÇÃO MODALIDADE: Limite de {LIMITE_PAGINAS_TESTE_SYNC} páginas atingido para modalidade {modalidade_id_sync}.")
                 break
+
+            # --- INÍCIO DA CORREÇÃO DE CONEXÃO PERDIDA (VERSÃO APRIMORADA) ---
+            # Garante que a conexão está ativa antes de cada uso.
+            # Caso contrário, tenta reconectar até 3 vezes com espera progressiva.
+            if conn is None:
+                logger.warning("Conexão inexistente. Tentando criar nova conexão...")
+                conn = get_db_connection()
+            else:
+                try:
+                    # 'ping(reconnect=False)' apenas verifica, sem tentar reconectar automaticamente.
+                    conn.ping(reconnect=False, attempts=1, delay=0)
+                except (mysql.connector.Error, AttributeError) as err:
+                    # Se chegar aqui, signica que primeiro deu um falso positivo ou a conexão foi perdida.
+                    logger.warning(f"Conexão com o banco perdida ou inválida ({type(err).__name__}). Tentando reconectar...")
+                    conn = None
+                    for attempt in range(1, 4):
+                        conn = get_db_connection()
+                        if conn and conn.is_connected():
+                            logger.info(f"Reconexão bem-sucedida (tentativa {attempt}/3).")
+                            break
+                        else:
+                            logger.warning(f"Falha ao reconectar (tentativa {attempt}/3). Tentando novamente em {2*attempt}s...")
+                            time.sleep(2 * attempt)
+            if not conn or not conn.is_connected():
+                logger.critical("Falha ao restabelecer conexão com o banco após múltiplas tentativas. Abortando script.")
+                return
+
             
             # --- Bloco de try/except para capturar o erro final do Tenacity ---
             try:
@@ -961,14 +989,24 @@ def sync_licitacoes_ultima_janela_anual():
                 licitacoes_processadas_total += len(licitacoes_data)
                 paginas_processadas_modalidade += 1
 
-            except (mysql.connector.Error, Exception) as e:
-                # Se QUALQUER licitação na página falhar, a transação inteira é revertida
+            except mysql.connector.errors.OperationalError as op_err:
+                # Captura especificamente o erro de "Lost connection"
+                logger.error(f"Erro operacional de DB (ex: conexão perdida) no lote da página {pagina_atual}. Erro: {op_err}")
+                # Não tentamos rollback, pois a conexão está provavelmente morta.
+                # A lógica no início do loop 'while' cuidará da reconexão.
+                motivo_falha = f"Erro operacional de DB no lote da página {pagina_atual}: {op_err}"
+                logar_pagina_falha(modalidade_id_sync, pagina_atual, data_inicio_api_str, data_fim_api_str, motivo_falha)
+
+            except Exception as e:
+                # Para outros erros de BD, tentamos o rollback
                 logger.error(f"Falha ao processar o lote da página {pagina_atual}. Rollback executado. Erro: {e}")
-                conn.rollback()
-                # E logamos a PÁGINA INTEIRA como falha para reprocessamento
+                try:
+                    conn.rollback()
+                except mysql.connector.Error as rb_err:
+                    logger.error(f"Erro adicional durante o rollback: {rb_err}")
                 motivo_falha = f"Erro de banco de dados no lote da página {pagina_atual}: {e}"
                 logar_pagina_falha(modalidade_id_sync, pagina_atual, data_inicio_api_str, data_fim_api_str, motivo_falha)
-            # --- FIM DA MELHORIA ---
+
             
             logger.info(f"SINCRONIZAÇÃO MODALIDADE: Página {pagina_atual} processada. {paginas_restantes} páginas restantes.")
             
