@@ -380,11 +380,12 @@ def _build_licitacoes_query(filtros):
     """
     condicoes_db = []
     parametros_db = []
+    status_radar = filtros.get('statusRadar')
 
     # --- Filtros normais (status, datas, etc.) ---
-    if filtros.get('statusRadar'):
+    if status_radar and status_radar.upper() != 'TODOS':
         condicoes_db.append("situacaoReal = %s")
-        parametros_db.append(filtros['statusRadar'])
+        parametros_db.append(status_radar)
     elif filtros.get('statusId') is not None:
         condicoes_db.append("situacaoCompraId = %s")
         parametros_db.append(filtros['statusId'])
