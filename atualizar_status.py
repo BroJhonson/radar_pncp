@@ -39,7 +39,7 @@ def atualizar_status_baseado_no_tempo():
             WHERE 
                 situacaoReal = 'A Receber/Recebendo Proposta'
                 AND dataEncerramentoProposta IS NOT NULL
-                AND dataEncerramentoProposta < CURDATE();
+                AND dataEncerramentoProposta < NOW();
         """
 
         logger.info("UPDATE_STATUS: Executando query para atualizar status de propostas encerradas...")

@@ -83,7 +83,7 @@ DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')
 TAMANHO_PAGINA_SYNC  = 50 # OBRIGATORIO
 LIMITE_PAGINAS_TESTE_SYNC = None # OBRIGATORIO. Mudar para 'None' para buscar todas.
 CODIGOS_MODALIDADE = [1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO) 1) L - Eletrônico, 2) D Competitivo, 3) Concurso, 4) Conc - Eletrônica, 5) Conc - Presencial, 6) P - Eletrônico, 7) P - Presencial, 8) D de Licitação, 9) Inex, 10) Manifestação de Interesse, 11) Pré-qualificação, 12) Credenciamento, 13) Lei - Presencial
-DIAS_JANELA_SINCRONIZACAO = 7 #Periodo da busca
+DIAS_JANELA_SINCRONIZACAO = 30 #Periodo da busca
 API_BASE_URL = "https://pncp.gov.br/api/consulta" # (URL base da API do PNCP)      
 API_BASE_URL_PNCP_API = "https://pncp.gov.br/pncp-api"   # Para itens e arquivos    ## PARA TODOS OS LINKS DE ARQUIVOS E ITENS USAR PAGINAÇÃO SE NECESSARIO ##
 MAX_CONSECUTIVE_API_FAILURES = 10 # Heurística para o disjuntor de segurança. Se houver mais que esse número de falhas consecutivas, o script aborta e pula a pagina.
@@ -290,13 +290,12 @@ def salvar_arquivos_no_banco(conn, licitacao_id_local, lista_arquivos_metadata_a
 
         link_de_download_individual = f"{API_BASE_URL_PNCP_API}/v1/orgaos/{cnpj_orgao}/compras/{ano_compra}/{sequencial_compra}/arquivos/{id_do_documento_api}"
         data_pub_pncp_str = arquivo_md_api.get('dataPublicacaoPncp')
-        data_pub_pncp_db = data_pub_pncp_str.split('T')[0] if data_pub_pncp_str else None
 
         arquivo_db_tuple = (
             licitacao_id_local,
             nome_do_arquivo,
             link_de_download_individual,
-            data_pub_pncp_db,
+            data_pub_pncp_str,
             arquivo_md_api.get('anoCompra'),
             bool(arquivo_md_api.get('statusAtivo')) # Convertendo para booleano explicitamente
         )
@@ -447,9 +446,9 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
         'valorTotalHomologado': licitacao_api_item.get('valorTotalHomologado'),
         'dataAberturaProposta': licitacao_api_item.get('dataAberturaProposta'),
         'dataEncerramentoProposta': licitacao_api_item.get('dataEncerramentoProposta'),
-        'dataPublicacaoPncp': licitacao_api_item.get('dataPublicacaoPncp', '').split('T')[0] if licitacao_api_item.get('dataPublicacaoPncp') else None,
-        'dataInclusao': licitacao_api_item.get('dataInclusao', '').split('T')[0] if licitacao_api_item.get('dataInclusao') else None,
-        'dataAtualizacao': licitacao_api_item.get('dataAtualizacao', '').split('T')[0] if licitacao_api_item.get('dataAtualizacao') else None,
+        'dataPublicacaoPncp': licitacao_api_item.get('dataPublicacaoPncp'),
+        'dataInclusao': licitacao_api_item.get('dataInclusao'),
+        'dataAtualizacao': licitacao_api_item.get('dataAtualizacao'),
         'sequencialCompra': licitacao_api_item.get('sequencialCompra'),
         'orgaoEntidadeCnpj': licitacao_api_item.get('orgaoEntidade', {}).get('cnpj'),
         'orgaoEntidadeRazaoSocial': licitacao_api_item.get('orgaoEntidade', {}).get('razaoSocial'),
@@ -486,7 +485,11 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
     cursor.execute("SELECT id, dataAtualizacao FROM licitacoes WHERE numeroControlePNCP = %s", (licitacao_db_parcial['numeroControlePNCP'],))
     row_existente = cursor.fetchone()
     api_data_att_str = licitacao_db_parcial.get('dataAtualizacao')
-    api_data_att_dt = datetime.strptime(api_data_att_str, '%Y-%m-%d').date() if api_data_att_str else None
+    if api_data_att_str:
+        # Substitui 'Z' (UTC) por '+00:00' para que o fromisoformat funcione universalmente
+        api_data_att_dt = datetime.fromisoformat(api_data_att_str.replace('Z', '+00:00'))
+    else:
+        api_data_att_dt = None
 
     # --- INÍCIO DA CORREÇÃO DO UNBOUNDLOCALERROR ---
     # Inicializamos a variável com um valor padrão ANTES do bloco condicional.
@@ -501,17 +504,28 @@ def  save_licitacao_to_db(conn, licitacao_api_item):
 
         logger.info(f"REGITRO_NO_BANCO_ENCONTRADO ({pncp_id}): Registro já existe. API data: {api_data_att_dt}, DB data: {db_data_att_dt}")
 
+        # O valor do banco agora será um objeto datetime.
         if isinstance(db_data_att_val, datetime):
-            db_data_att_dt = db_data_att_val.date()
-        elif isinstance(db_data_att_val, date):
             db_data_att_dt = db_data_att_val
-        elif isinstance(db_data_att_val, str):
-            try:
-                db_data_att_dt = datetime.strptime(db_data_att_val, '%Y-%m-%d').date()
-            except (ValueError, TypeError):
-                db_data_att_dt = None # Trata data mal formatada no banco
-        else:
-            db_data_att_dt = None # Já era o padrão, mas deixamos explícito
+        elif isinstance(db_data_att_val, str): # Fallback para o caso de algum valor ser string
+             try:
+                db_data_att_dt = datetime.fromisoformat(db_data_att_val.replace('Z', '+00:00'))
+             except (ValueError, TypeError):
+                db_data_att_dt = None
+        
+        # Vou deixar essa parte so para ter certeza que deu certo ------
+        # Converter db_data_att_val para date
+        #if isinstance(db_data_att_val, datetime):
+        #    db_data_att_dt = db_data_att_val.date()
+        #elif isinstance(db_data_att_val, date):
+        #    db_data_att_dt = db_data_att_val
+        #elif isinstance(db_data_att_val, str):
+        #    try:
+        #        db_data_att_dt = datetime.strptime(db_data_att_val, '%Y-%m-%d').date()
+        #    except (ValueError, TypeError):
+        #        db_data_att_dt = None # Trata data mal formatada no banco
+        #else:
+        #    db_data_att_dt = None # Já era o padrão, mas deixamos explícito
 
 
         # Só marca como "mudou" se a API tiver data mais recente
@@ -842,8 +856,8 @@ def salvar_itens_no_banco(conn, licitacao_id_local, lista_itens_api):
             get_primitive_value(item_api, 'situacaoCompraItemNome'),
             get_primitive_value(item_api, 'tipoBeneficioNome'),
             bool(item_api.get('incentivoProdutivoBasico')),
-            data_inclusao_str.split('T')[0] if data_inclusao_str else None,
-            data_atualizacao_str.split('T')[0] if data_atualizacao_str else None,
+            data_inclusao_str,
+            data_atualizacao_str,
             bool(item_api.get('temResultado')),
             get_primitive_value(item_api, 'informacaoComplementar')
         )
