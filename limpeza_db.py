@@ -9,7 +9,7 @@ import time
 load_dotenv()
 
 # --- Configurações ---
-DIAS_RETENCAO_LICITACOES = 365 # Manter licitações atualizadas nos últimos 370 dias
+DIAS_RETENCAO_LICITACOES = 300 # Manter licitações atualizadas nos últimos 370 dias
 
 def get_db_connection():
     """Retorna uma conexão com o banco de dados MariaDB."""

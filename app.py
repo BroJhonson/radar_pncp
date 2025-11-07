@@ -508,21 +508,28 @@ def get_licitacoes():
 
     # 2. Coleta todos os filtros em um único dicionário
     filtros = {
-        'ufs': request.args.getlist('uf'),
-        'modalidadesId': request.args.getlist('modalidadeId', type=int),
+        # 'ufs': request.args.getlist('uf'),
+
+        # Recebe a string e a quebra em uma lista, removendo espaços vazios
+        'ufs': [uf.strip() for uf in request.args.get('uf', '').split(',') if uf.strip()],
+        'modalidadesId': [int(mid.strip()) for mid in request.args.get('modalidadeId', '').split(',') if mid.strip()],
+        # 'modalidadesId': request.args.getlist('modalidadeId', type=int),
         'statusRadar': request.args.get('statusRadar'),
         'dataPubInicio': request.args.get('dataPubInicio'),
         'dataPubFim': request.args.get('dataPubFim'),
         'valorMin': request.args.get('valorMin', type=float),
         'valorMax': request.args.get('valorMax', type=float),
-        'municipiosNome': request.args.getlist('municipioNome'),
+        # 'municipiosNome': request.args.getlist('municipioNome'),
+        'municipiosNome': [m.strip() for m in request.args.get('municipioNome', '').split(',') if m.strip()],
         'dataAtualizacaoInicio': request.args.get('dataAtualizacaoInicio'),
         'dataAtualizacaoFim': request.args.get('dataAtualizacaoFim'),
         'anoCompra': request.args.get('anoCompra', type=int),
         'cnpjOrgao': request.args.get('cnpjOrgao'),
         'statusId': request.args.get('statusId', type=int),
-        'palavrasChave': request.args.getlist('palavraChave'),
-        'excluirPalavras': request.args.getlist('excluirPalavra')
+        # 'palavrasChave': request.args.getlist('palavraChave'),
+        # 'excluirPalavras': request.args.getlist('excluirPalavra')
+        'palavrasChave': [kw.strip() for kw in request.args.get('palavraChave', '').split(',') if kw.strip()],
+        'excluirPalavras': [kw.strip() for kw in request.args.get('excluirPalavra', '').split(',') if kw.strip()],
     }
     # Limpa filtros vazios ou nulos
     filtros = {k: v for k, v in filtros.items() if v is not None and v != '' and v != []}
