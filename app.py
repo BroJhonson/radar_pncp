@@ -480,6 +480,10 @@ def _build_licitacoes_query(filtros):
     query_where = ""
     if condicoes_db:
         query_where = " WHERE " + " AND ".join(condicoes_db)
+
+    # lOG DE DEBUG DA QUERY CONSTRUÍDA (Saber qual foi a URL e os parâmetros)
+    app.logger.info(f"Query Construída: WHERE = '{query_where}'")
+    app.logger.info(f"Parâmetros da Query: {parametros_db}")
     
     return query_where, parametros_db
 
@@ -507,12 +511,26 @@ def get_licitacoes():
         return jsonify({"erro": "Parâmetro de direção de ordenação inválido."}), 400
 
     # 2. Coleta todos os filtros em um único dicionário
+    # Função auxiliar para limpar e dividir a string
+    def parse_lista_param(param_name):
+        value = request.args.get(param_name, '')
+        # Primeiro, divide pela vírgula. Depois, remove espaços de cada item.
+        # E por fim, filtra quaisquer itens que ficaram vazios.
+        return [item.strip() for item in value.split(',') if item.strip()]
+
     filtros = {
+        'ufs': parse_lista_param('uf'),
+        'modalidadesId': [int(item) for item in parse_lista_param('modalidadeId') if item.isdigit()],
+        'municipiosNome': parse_lista_param('municipioNome'),
+        'palavrasChave': parse_lista_param('palavraChave'),
+        'excluirPalavras': parse_lista_param('excluirPalavra'),
+        # FIM DA REVISÃO AQUI ------------
+
         # 'ufs': request.args.getlist('uf'),
 
         # Recebe a string e a quebra em uma lista, removendo espaços vazios
-        'ufs': [uf.strip() for uf in request.args.get('uf', '').split(',') if uf.strip()],
-        'modalidadesId': [int(mid.strip()) for mid in request.args.get('modalidadeId', '').split(',') if mid.strip()],
+        #'ufs': [uf.strip() for uf in request.args.get('uf', '').split(',') if uf.strip()],
+        #'modalidadesId': [int(mid.strip()) for mid in request.args.get('modalidadeId', '').split(',') if mid.strip()],
         # 'modalidadesId': request.args.getlist('modalidadeId', type=int),
         'statusRadar': request.args.get('statusRadar'),
         'dataPubInicio': request.args.get('dataPubInicio'),
@@ -520,7 +538,7 @@ def get_licitacoes():
         'valorMin': request.args.get('valorMin', type=float),
         'valorMax': request.args.get('valorMax', type=float),
         # 'municipiosNome': request.args.getlist('municipioNome'),
-        'municipiosNome': [m.strip() for m in request.args.get('municipioNome', '').split(',') if m.strip()],
+        #'municipiosNome': [m.strip() for m in request.args.get('municipioNome', '').split(',') if m.strip()],
         'dataAtualizacaoInicio': request.args.get('dataAtualizacaoInicio'),
         'dataAtualizacaoFim': request.args.get('dataAtualizacaoFim'),
         'anoCompra': request.args.get('anoCompra', type=int),
@@ -528,8 +546,8 @@ def get_licitacoes():
         'statusId': request.args.get('statusId', type=int),
         # 'palavrasChave': request.args.getlist('palavraChave'),
         # 'excluirPalavras': request.args.getlist('excluirPalavra')
-        'palavrasChave': [kw.strip() for kw in request.args.get('palavraChave', '').split(',') if kw.strip()],
-        'excluirPalavras': [kw.strip() for kw in request.args.get('excluirPalavra', '').split(',') if kw.strip()],
+        #'palavrasChave': [kw.strip() for kw in request.args.get('palavraChave', '').split(',') if kw.strip()],
+        #'excluirPalavras': [kw.strip() for kw in request.args.get('excluirPalavra', '').split(',') if kw.strip()],
     }
     # Limpa filtros vazios ou nulos
     filtros = {k: v for k, v in filtros.items() if v is not None and v != '' and v != []}

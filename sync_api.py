@@ -82,8 +82,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.path.join(BASE_DIR, 'database.db')
 TAMANHO_PAGINA_SYNC  = 50 # OBRIGATORIO
 LIMITE_PAGINAS_TESTE_SYNC = None # OBRIGATORIO. Mudar para 'None' para buscar todas.
-CODIGOS_MODALIDADE = [1, 2,  3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] #(OBRIGATORIO) 1) L - Eletrônico, 2) D Competitivo, 3) Concurso, 4) Conc - Eletrônica, 5) Conc - Presencial, 6) P - Eletrônico, 7) P - Presencial, 8) D de Licitação, 9) Inex, 10) Manifestação de Interesse, 11) Pré-qualificação, 12) Credenciamento, 13) Lei - Presencial
-DIAS_JANELA_SINCRONIZACAO = 30 #Periodo da busca
+CODIGOS_MODALIDADE = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] 
+# 1) L - Eletrônico, 2) D Competitivo, 3) Concurso, 4) Conc - Eletrônica, 5) Conc - Presencial, 6) P - Eletrônico, 7) P - Presencial, 8) D de Licitação, 9) Inex, 10) Manifestação de Interesse, 
+# 11) Pré-qualificação, 12) Credenciamento, 13) Lei - Presencial
+
+DIAS_JANELA_SINCRONIZACAO = 7 #Periodo da busca
 API_BASE_URL = "https://pncp.gov.br/api/consulta" # (URL base da API do PNCP)      
 API_BASE_URL_PNCP_API = "https://pncp.gov.br/pncp-api"   # Para itens e arquivos    ## PARA TODOS OS LINKS DE ARQUIVOS E ITENS USAR PAGINAÇÃO SE NECESSARIO ##
 MAX_CONSECUTIVE_API_FAILURES = 10 # Heurística para o disjuntor de segurança. Se houver mais que esse número de falhas consecutivas, o script aborta e pula a pagina.
