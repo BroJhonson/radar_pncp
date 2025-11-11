@@ -23,6 +23,7 @@ import time
 from datetime import datetime, date
 import bleach
 from flask_cors import CORS
+from flask_caching import Cache
 import logging
 from logging.handlers import RotatingFileHandler # Para log rotate
 from decimal import Decimal # Para manipular números decimais do banco
@@ -39,6 +40,14 @@ class ContatoSchema(BaseModel):
     email_usuario: EmailStr # Valida automaticamente se é um e-mail
     assunto_contato: str
     mensagem_contato: str
+
+# --- CONFIGURAÇÃO DO CACHE ---
+# Configura o cache para usar Redis, com um timeout padrão de 1 hora (3600 segundos)
+cache = Cache(app, config={
+    'CACHE_TYPE': 'RedisCache',
+    'CACHE_REDIS_URL': 'redis://localhost:6379/0',
+    'CACHE_DEFAULT_TIMEOUT': 3600
+})
 
 # --- CONFIGURAÇÃO DE LOGGING PARA A APLICAÇÃO FLASK ---
 # Garante que o diretório de logs exista
@@ -488,6 +497,7 @@ def _build_licitacoes_query(filtros):
     return query_where, parametros_db
 
 @app.route('/api/licitacoes', methods=['GET'])
+@cache.cached(timeout=900, query_string=True)
 def get_licitacoes():
     # 1. Coleta e valida os parâmetros de paginação/ordenação
     pagina = request.args.get('pagina', default=1, type=int)

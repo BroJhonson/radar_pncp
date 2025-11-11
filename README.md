@@ -91,4 +91,5 @@ Siga os passos abaixo para configurar e executar o RADAR PNCP em sua máquina.
 git clone https://github.com/BroJhonson/plataforma-licitacoes.git
 cd plataforma-licitacoes
 
-Precisa criar a pasta logs
+## atualizar o requirements
+pip freeze > requirements.txt
