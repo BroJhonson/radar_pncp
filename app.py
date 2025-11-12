@@ -392,6 +392,26 @@ def _build_licitacoes_query(filtros):
     parametros_db = []
     status_radar = filtros.get('statusRadar')
 
+    # --- 🔧 NORMALIZAÇÃO GERAL ---
+    def normalize_field(value):
+        """
+        Garante que qualquer campo venha como lista de strings limpas.
+        Aceita strings únicas, listas ou None.
+        """
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if str(v).strip()]
+        elif isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    # Normaliza todos os campos que podem ser múltiplos
+    filtros['ufs'] = normalize_field(filtros.get('ufs'))
+    filtros['modalidadesId'] = normalize_field(filtros.get('modalidadesId'))
+    filtros['municipiosNome'] = normalize_field(filtros.get('municipiosNome'))
+    filtros['palavrasChave'] = normalize_field(filtros.get('palavrasChave'))
+    filtros['excluirPalavra'] = normalize_field(filtros.get('excluirPalavra'))
+    # FIM DA NORMALIZAÇÃO
+
     # --- Filtros normais (status, datas, etc.) ---
     if status_radar and status_radar.upper() != 'TODOS':
         condicoes_db.append("situacaoReal = %s")
@@ -400,12 +420,14 @@ def _build_licitacoes_query(filtros):
         condicoes_db.append("situacaoCompraId = %s")
         parametros_db.append(filtros['statusId'])
 
-    if filtros.get('ufs'):
+    # --- UF ---
+    if filtros['ufs']:
         placeholders = ', '.join(['%s'] * len(filtros['ufs']))
         condicoes_db.append(f"unidadeOrgaoUfSigla IN ({placeholders})")
         parametros_db.extend([uf.upper() for uf in filtros['ufs']])
 
-    if filtros.get('modalidadesId'):
+    # --- Modalidades ---
+    if filtros['modalidadesId']:
         placeholders = ', '.join(['%s'] * len(filtros['modalidadesId']))
         condicoes_db.append(f"modalidadeId IN ({placeholders})")
         parametros_db.extend(filtros['modalidadesId'])
@@ -431,7 +453,8 @@ def _build_licitacoes_query(filtros):
         condicoes_db.append("dataAtualizacao <= %s")
         parametros_db.append(filtros['dataAtualizacaoFim'])
 
-    if filtros.get('municipiosNome'):
+    # --- Municípios ---
+    if filtros['municipiosNome']:
         placeholders = ', '.join(['%s'] * len(filtros['municipiosNome']))
         condicoes_db.append(f"unidadeOrgaoMunicipioNome IN ({placeholders})")
         parametros_db.extend(filtros['municipiosNome'])
@@ -447,25 +470,21 @@ def _build_licitacoes_query(filtros):
     # --- Filtros de Texto com FULLTEXT SEARCH (Lógica OU e Exclusão) ---
     search_terms = []
 
-    # 🔍 Inclusão
-    if filtros.get('palavrasChave'):
-        # Exemplo recebido: 'curso empresa "escritorio de advocacia"'
-        # Garante que é string, mesmo que venha como lista
-        palavras_str = ' '.join(filtros['palavrasChave']) if isinstance(filtros['palavrasChave'], list) else str(filtros['palavrasChave'])
-        # Usa shlex para quebrar respeitando aspas
-        termos = shlex.split(palavras_str)
-        # Adiciona aspas de novo em frases (para FULLTEXT exato)
-        search_terms.extend([
-            f'"{t}"' if ' ' in t else t for t in termos
-        ])
+     # 🔍 Inclusão
+    if filtros['palavrasChave']:
+        for valor in filtros['palavrasChave']:
+            termos = shlex.split(valor)
+            search_terms.extend([
+                f'"{t}"' if ' ' in t else t for t in termos
+            ])
 
     # 🔍 Exclusão
-    if filtros.get('excluirPalavra'):
-        palavras_str = ' '.join(filtros['excluirPalavra']) if isinstance(filtros['excluirPalavra'], list) else str(filtros['excluirPalavra'])
-        termos = shlex.split(palavras_str)
-        search_terms.extend([
-            f'-"{t}"' if ' ' in t else f'-{t}' for t in termos
-        ])
+    if filtros['excluirPalavra']:
+        for valor in filtros['excluirPalavra']:
+            termos = shlex.split(valor)
+            search_terms.extend([
+                f'-"{t}"' if ' ' in t else f'-{t}' for t in termos
+            ])
 
     # Se houver qualquer termo de busca (inclusão ou exclusão), montamos a query
     if search_terms:
