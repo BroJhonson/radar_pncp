@@ -46,7 +46,7 @@ class ContatoSchema(BaseModel):
 cache = Cache(app, config={
     'CACHE_TYPE': 'RedisCache',
     'CACHE_REDIS_URL': 'redis://localhost:6379/0',
-    'CACHE_DEFAULT_TIMEOUT': 3600
+    'CACHE_DEFAULT_TIMEOUT': 10800 # 3600 # (Segundos) Equivale a 1 hora - Mas vou deixar 3 horas nessa porra
 })
 
 # --- CONFIGURAÇÃO DE LOGGING PARA A APLICAÇÃO FLASK ---
@@ -481,7 +481,7 @@ def _build_licitacoes_query(filtros):
 
         # Só adiciona a cláusula se a query final não for vazia
         if search_query:
-            campos_fts = "objetoCompra, orgaoEntidadeRazaoSocial, unidadeOrgaoNome, numeroControlePNCP, unidadeOrgaoMunicipioNome, unidadeOrgaoUfNome, orgaoEntidadeCnpj"
+            campos_fts = "objetoCompra, orgaoEntidadeRazaoSocial, unidadeOrgaoNome, orgaoEntidadeCnpj"
 
             condicoes_db.append(f"MATCH({campos_fts}) AGAINST (%s IN BOOLEAN MODE)")
             parametros_db.append(search_query)
@@ -497,7 +497,7 @@ def _build_licitacoes_query(filtros):
     return query_where, parametros_db
 
 @app.route('/api/licitacoes', methods=['GET'])
-@cache.cached(timeout=900, query_string=True)
+@cache.cached(timeout=10800, query_string=True)   # Cacheia a resposta por 3 horas, considerando os parâmetros da query string. Mudar depois para "timeout=900" quando tiver muitos usuários
 def get_licitacoes():
     # 1. Coleta e valida os parâmetros de paginação/ordenação
     pagina = request.args.get('pagina', default=1, type=int)

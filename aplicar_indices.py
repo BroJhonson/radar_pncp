@@ -11,7 +11,7 @@ load_dotenv()
 # IMPORTANTE: Colocamos 'IGNORE' para não dar erro se o índice já existir
 comandos_sql = [
     # 1. Índice FTS (se ainda não tiver)
-    "ALTER TABLE licitacoes ADD FULLTEXT idx_fts_busca (objetoCompra, orgaoEntidadeRazaoSocial, unidadeOrgaoNome, numeroControlePNCP, unidadeOrgaoMunicipioNome, unidadeOrgaoUfNome, orgaoEntidadeCnpj)",
+    "ALTER TABLE licitacoes ADD FULLTEXT idx_fts_busca (objetoCompra, orgaoEntidadeRazaoSocial, unidadeOrgaoNome, orgaoEntidadeCnpj)",
     
     # 2. Índice para a página de DETALHES (essencial)
     "CREATE INDEX idx_num_pncp ON licitacoes (numeroControlePNCP)",
