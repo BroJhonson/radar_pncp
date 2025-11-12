@@ -9,6 +9,7 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, f
 import requests  # Para chamar a API do IBGE
 from markupsafe import Markup, escape
 from functools import wraps
+import shlex  # biblioteca padrão que entende aspas em strings
 # Para envio de e-mail
 import smtplib
 from email.mime.text import MIMEText
@@ -446,18 +447,24 @@ def _build_licitacoes_query(filtros):
     # --- Filtros de Texto com FULLTEXT SEARCH (Lógica OU e Exclusão) ---
     search_terms = []
 
-    # Inclusão (Lógica OU)
+    # 🔍 Inclusão
     if filtros.get('palavrasChave'):
-        # O modo booleano do FTS sem operadores (+, -) funciona como um OR por padrão.
-        # Apenas juntamos as palavras com espaços. Ex: "consultoria software"
-        # Isso encontrará documentos que contenham 'consultoria' OU 'software'.
-        search_terms.extend(filtros['palavrasChave'])
+        # Exemplo recebido: 'curso empresa "escritorio de advocacia"'
+        palavras_str = filtros['palavrasChave']
+        # Usa shlex para quebrar respeitando aspas
+        termos = shlex.split(palavras_str)
+        # Adiciona aspas de novo em frases (para FULLTEXT exato)
+        search_terms.extend([
+            f'"{t}"' if ' ' in t else t for t in termos
+        ])
 
-    # Exclusão
-    if filtros.get('excluirPalavras'):
-        # Adicionamos o operador '-' na frente de cada palavra de exclusão.
-        # Ex: "-licitação -cancelada"
-        search_terms.extend([f"-{palavra}" for palavra in filtros['excluirPalavras']])
+    # 🔍 Exclusão
+    if filtros.get('excluirPalavra'):
+        palavras_str = filtros['excluirPalavra']
+        termos = shlex.split(palavras_str)
+        search_terms.extend([
+            f'-"{t}"' if ' ' in t else f'-{t}' for t in termos
+        ])
 
     # Se houver qualquer termo de busca (inclusão ou exclusão), montamos a query
     if search_terms:
@@ -468,23 +475,21 @@ def _build_licitacoes_query(filtros):
         #   \-+ (operadores FTS)
         #   espaço ( )
         #   @\./_ (separadores comuns)
-        #   " (para frases exatas)
-        #
+        #   " (para frases exatas)        
         invalid_chars_regex = r'[^0-9a-zA-Zá-úÁ-ÚçÇ\-\+ @\./_"]'
 
         # Limpa CADA termo individualmente
         sanitized_terms = [re.sub(invalid_chars_regex, '', term) for term in search_terms]
 
         # Junta os termos JÁ LIMPOS e filtrados de entradas vazias
-        search_query = ' '.join(filter(None, sanitized_terms))
+        match_string = ' '.join(sanitized_terms).strip()
 
-
-        # Só adiciona a cláusula se a query final não for vazia
-        if search_query:
+        if match_string:
             campos_fts = "objetoCompra, orgaoEntidadeRazaoSocial, unidadeOrgaoNome, orgaoEntidadeCnpj"
-
-            condicoes_db.append(f"MATCH({campos_fts}) AGAINST (%s IN BOOLEAN MODE)")
-            parametros_db.append(search_query)
+            condicoes_db.append(
+                f"MATCH({campos_fts}) AGAINST (%s IN BOOLEAN MODE)"
+            )
+            parametros_db.append(match_string)
 
     query_where = ""
     if condicoes_db:
