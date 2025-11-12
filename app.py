@@ -450,7 +450,8 @@ def _build_licitacoes_query(filtros):
     # 🔍 Inclusão
     if filtros.get('palavrasChave'):
         # Exemplo recebido: 'curso empresa "escritorio de advocacia"'
-        palavras_str = filtros['palavrasChave']
+        # Garante que é string, mesmo que venha como lista
+        palavras_str = ' '.join(filtros['palavrasChave']) if isinstance(filtros['palavrasChave'], list) else str(filtros['palavrasChave'])
         # Usa shlex para quebrar respeitando aspas
         termos = shlex.split(palavras_str)
         # Adiciona aspas de novo em frases (para FULLTEXT exato)
@@ -460,7 +461,7 @@ def _build_licitacoes_query(filtros):
 
     # 🔍 Exclusão
     if filtros.get('excluirPalavra'):
-        palavras_str = filtros['excluirPalavra']
+        palavras_str = ' '.join(filtros['excluirPalavra']) if isinstance(filtros['excluirPalavra'], list) else str(filtros['excluirPalavra'])
         termos = shlex.split(palavras_str)
         search_terms.extend([
             f'-"{t}"' if ' ' in t else f'-{t}' for t in termos
@@ -482,7 +483,7 @@ def _build_licitacoes_query(filtros):
         sanitized_terms = [re.sub(invalid_chars_regex, '', term) for term in search_terms]
 
         # Junta os termos JÁ LIMPOS e filtrados de entradas vazias
-        match_string = ' '.join(sanitized_terms).strip()
+        match_string = ' '.join(filter(None, sanitized_terms))
 
         if match_string:
             campos_fts = "objetoCompra, orgaoEntidadeRazaoSocial, unidadeOrgaoNome, orgaoEntidadeCnpj"
