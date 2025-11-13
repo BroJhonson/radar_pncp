@@ -84,6 +84,7 @@ def log_request_info():
     if request.path.startswith('/static'):
         return
 
+    app.logger.info("--------------------- Nova Requisição -----------------------")
     # Loga a informação desejada usando o logger que você já configurou
     app.logger.info(
         f"Requisição Recebida: {request.method} {request.url} - IP: {request.remote_addr}"
@@ -500,9 +501,16 @@ def _build_licitacoes_query(filtros):
     if filtros['excluirPalavra']:
         for valor in filtros['excluirPalavra']:
             termos = shlex.split(valor)
-            search_terms.extend([
-                f'-"{t}"' if ' ' in t else f'-{t}' for t in termos
-            ])
+            for t in termos:
+                # 1. Limpa qualquer '-' que o cliente tenha enviado
+                clean_t = t.lstrip('-') 
+                
+                # 2. Adiciona o '-' de volta, com aspas se for frase
+                if ' ' in clean_t:
+                    search_terms.append(f'-"{clean_t}"')
+                else:
+                    search_terms.append(f'-{clean_t}')
+
 
     app.logger.info(f"Termos de busca processados: {search_terms}")
     app.logger.info(f"Filtros aplicados: {filtros}")
@@ -587,7 +595,7 @@ def get_licitacoes():
         'modalidadesId': [int(item) for item in parse_lista_param('modalidadeId') if item.isdigit()],
         'municipiosNome': parse_lista_param('municipioNome'),
         'palavrasChave': parse_lista_param('palavraChave'),
-        'excluirPalavras': parse_lista_param('excluirPalavra'),
+        'excluirPalavra': parse_lista_param('excluirPalavra'),
         # FIM DA REVISÃO AQUI ------------
 
         # 'ufs': request.args.getlist('uf'),
