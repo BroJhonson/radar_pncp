@@ -75,6 +75,21 @@ app.logger.setLevel(logging.INFO)
 app.logger.info('Aplicação Radar PNCP iniciada')
 # --- FIM DA CONFIGURAÇÃO DE LOGGING ---
 
+# --- LOG PARA SABER QUAL URL RECEBEMOS ---
+@app.before_request
+def log_request_info():
+    """Loga a URL completa, método e IP de cada requisição recebida."""
+    # Evita logar requisições para arquivos estáticos (CSS, JS, imagens), 
+    # que geram muito "ruído" no log.
+    if request.path.startswith('/static'):
+        return
+
+    # Loga a informação desejada usando o logger que você já configurou
+    app.logger.info(
+        f"Requisição Recebida: {request.method} {request.url} - IP: {request.remote_addr}"
+    )
+# --- FIM DO LOG DE REQUISIÇÕES ---
+
 # --- INÍCIO DA CONFIGURAÇÃO DO RATE LIMITER ---
 limiter = Limiter(
     get_remote_address,
