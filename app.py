@@ -88,6 +88,9 @@ def log_request_info():
     app.logger.info(
         f"Requisição Recebida: {request.method} {request.url} - IP: {request.remote_addr}"
     )
+
+    # Loga também os parâmetros já decodificados
+    app.logger.info(f"Parâmetros decodificados: {dict(request.args)}")
 # --- FIM DO LOG DE REQUISIÇÕES ---
 
 # --- INÍCIO DA CONFIGURAÇÃO DO RATE LIMITER ---
