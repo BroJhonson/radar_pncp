@@ -9,7 +9,7 @@ import time
 load_dotenv()
 
 # --- Configurações ---
-DIAS_RETENCAO_LICITACOES = 300 # Manter licitações atualizadas nos últimos 370 dias
+DIAS_RETENCAO_LICITACOES = 300 # Dias para manter as licitações na base de dados
 
 def get_db_connection():
     """Retorna uma conexão com o banco de dados MariaDB."""
@@ -45,8 +45,14 @@ def cleanup_licitacoes_antigas():
         
         total_deleted = 0
         while True:
-            # DELETA APENAS 1000 LINHAS POR VEZ
-            query_delete = "DELETE FROM licitacoes WHERE dataAtualizacao < %s LIMIT 1000"
+            # DELETA APENAS 1000 LINHAS POR VEZ E TODAS COM STATUS ENCERRADA
+            query_delete = """
+                DELETE FROM licitacoes 
+                WHERE 
+                    dataAtualizacao < %s 
+                    AND situacaoReal = 'Encerrada'
+                LIMIT 1000
+            """
             cursor.execute(query_delete, (data_limite_str,))
             deleted_count_this_batch = cursor.rowcount
             conn.commit()

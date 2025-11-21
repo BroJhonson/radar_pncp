@@ -86,7 +86,7 @@ CODIGOS_MODALIDADE = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 # 1) L - Eletrônico, 2) D Competitivo, 3) Concurso, 4) Conc - Eletrônica, 5) Conc - Presencial, 6) P - Eletrônico, 7) P - Presencial, 8) D de Licitação, 9) Inex, 10) Manifestação de Interesse, 
 # 11) Pré-qualificação, 12) Credenciamento, 13) Lei - Presencial
 
-DIAS_JANELA_SINCRONIZACAO = 7 #Periodo da busca
+DIAS_JANELA_SINCRONIZACAO = 3 #Periodo da busca
 API_BASE_URL = "https://pncp.gov.br/api/consulta" # (URL base da API do PNCP)      
 API_BASE_URL_PNCP_API = "https://pncp.gov.br/pncp-api"   # Para itens e arquivos    ## PARA TODOS OS LINKS DE ARQUIVOS E ITENS USAR PAGINAÇÃO SE NECESSARIO ##
 MAX_CONSECUTIVE_API_FAILURES = 10 # Heurística para o disjuntor de segurança. Se houver mais que esse número de falhas consecutivas, o script aborta e pula a pagina.
@@ -386,7 +386,7 @@ def fetch_licitacoes_por_atualizacao(data_inicio_str, data_fim_str, codigo_modal
         
         if response.status_code == 204:
             logger.info(f"SYNC_API: Recebido status 204 (No Content) para {url_api_pncp} com params {params_api}.")
-            return None, 0
+            return [], 0
         
         data_api = response.json()
         return data_api.get('data'), data_api.get('paginasRestantes', 0)
@@ -987,7 +987,7 @@ def sync_licitacoes_ultima_janela_anual():
             erros_consecutivos_api = 0
             
             if not licitacoes_data:
-                logger.info(f"SINCRONIZAÇÃO MODALIDADE: Fim dos dados para modalidade {modalidade_id_sync} na página {pagina_atual} (página vazia).")
+                logger.info(f"SINCRONIZAÇÃO MODALIDADE: Fim dos dados para modalidade {modalidade_id_sync} na página {pagina_atual} (página vazia ou 204 No Content).")
                 break
             
             logger.info(f"SINCRONIZAÇÃO MODALIDADE: Modalidade {modalidade_id_sync}, Página {pagina_atual}: Processando {len(licitacoes_data)} licitações.")
