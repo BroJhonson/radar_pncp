@@ -410,6 +410,7 @@ def _build_licitacoes_query(filtros):
     condicoes_db = []
     parametros_db = []
     status_radar = filtros.get('statusRadar')
+    match_string = "" 
 
     # --- 🔧 NORMALIZAÇÃO GERAL ---
     def normalize_field(value):
@@ -490,16 +491,18 @@ def _build_licitacoes_query(filtros):
     search_terms = []
 
      # 🔍 Inclusão
-    if filtros['palavrasChave']:
-        for valor in filtros['palavrasChave']:
+    palavras_chave = filtros.get('palavrasChave', [])
+    if palavras_chave:
+        for valor in palavras_chave:
             termos = shlex.split(valor)
             search_terms.extend([
                 f'"{t}"' if ' ' in t else t for t in termos
             ])
 
     # 🔍 Exclusão
-    if filtros['excluirPalavra']:
-        for valor in filtros['excluirPalavra']:
+    excluir_palavras = filtros.get('excluirPalavra', [])
+    if excluir_palavras:
+        for valor in excluir_palavras:
             termos = shlex.split(valor)
             for t in termos:
                 # 1. Limpa qualquer '-' que o cliente tenha enviado
@@ -513,10 +516,7 @@ def _build_licitacoes_query(filtros):
 
 
     app.logger.info(f"Termos de busca processados: {search_terms}")
-    app.logger.info(f"Filtros aplicados: {filtros}")
-    #app.logger.info(f"Condições DB até agora: {condicoes_db}")
-    #app.logger.info(f"Parâmetros DB até agora: {parametros_db}")
-    
+    app.logger.info(f"Filtros aplicados: {filtros}")    
 
     # Se houver qualquer termo de busca (inclusão ou exclusão), montamos a query
     if search_terms:
@@ -528,19 +528,16 @@ def _build_licitacoes_query(filtros):
         #   espaço ( )
         #   @\./_ (separadores comuns)
         #   " (para frases exatas)        
-        invalid_chars_regex = r'[^0-9a-zA-Zá-úÁ-ÚçÇ\-\+ @\./_"]'
-
-        # Limpa CADA termo individualmente
+        invalid_chars_regex = r'[^0-9a-zA-Zá-úÁ-ÚçÇ\-\+"*@\./_ ]' # Permitido '*' para buscas de prefixo
         sanitized_terms = [re.sub(invalid_chars_regex, '', term) for term in search_terms]
-
-        # Junta os termos JÁ LIMPOS e filtrados de entradas vazias
         match_string = ' '.join(filter(None, sanitized_terms))
-
+        
         if match_string:
+            # LOG MOVIDO PARA CÁ: Só loga se houver algo para logar
+            app.logger.info(f"FTS Query: MATCH() AGAINST ('{match_string}' IN BOOLEAN MODE)")
+            
             campos_fts = "objetoCompra, orgaoEntidadeRazaoSocial, unidadeOrgaoNome, orgaoEntidadeCnpj"
-            condicoes_db.append(
-                f"MATCH({campos_fts}) AGAINST (%s IN BOOLEAN MODE)"
-            )
+            condicoes_db.append(f"MATCH({campos_fts}) AGAINST (%s IN BOOLEAN MODE)")
             parametros_db.append(match_string)
 
     query_where = ""
@@ -551,14 +548,12 @@ def _build_licitacoes_query(filtros):
     app.logger.info(f"Query Construída: WHERE = '{query_where}'")
     app.logger.info(f"Parâmetros da Query: {parametros_db}")
     app.logger.info(f"Filtros finais aplicados: {filtros}")
-    app.logger.info(f"Parâmetros DB finais: {parametros_db}")
     app.logger.info(f"Palavras de busca finais: {search_terms}")
     app.logger.info(f"String de busca final: '{match_string}'")
     app.logger.info(f"Modalidades ID finais: {filtros['modalidadesId']}")
     app.logger.info(f"UFs finais: {filtros['ufs']}")
     app.logger.info(f"Municípios finais: {filtros['municipiosNome']}")
     
-
     return query_where, parametros_db
 
 @app.route('/api/licitacoes', methods=['GET'])
