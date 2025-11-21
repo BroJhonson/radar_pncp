@@ -514,8 +514,8 @@ def _build_licitacoes_query(filtros):
 
     app.logger.info(f"Termos de busca processados: {search_terms}")
     app.logger.info(f"Filtros aplicados: {filtros}")
-    app.logger.info(f"Condições DB até agora: {condicoes_db}")
-    app.logger.info(f"Parâmetros DB até agora: {parametros_db}")
+    #app.logger.info(f"Condições DB até agora: {condicoes_db}")
+    #app.logger.info(f"Parâmetros DB até agora: {parametros_db}")
     
 
     # Se houver qualquer termo de busca (inclusão ou exclusão), montamos a query
@@ -551,9 +551,12 @@ def _build_licitacoes_query(filtros):
     app.logger.info(f"Query Construída: WHERE = '{query_where}'")
     app.logger.info(f"Parâmetros da Query: {parametros_db}")
     app.logger.info(f"Filtros finais aplicados: {filtros}")
-    app.logger.info(f"Condições DB finais: {condicoes_db}")
     app.logger.info(f"Parâmetros DB finais: {parametros_db}")
     app.logger.info(f"Palavras de busca finais: {search_terms}")
+    app.logger.info(f"String de busca final: '{match_string}'")
+    app.logger.info(f"Modalidades ID finais: {filtros['modalidadesId']}")
+    app.logger.info(f"UFs finais: {filtros['ufs']}")
+    app.logger.info(f"Municípios finais: {filtros['municipiosNome']}")
     
 
     return query_where, parametros_db
