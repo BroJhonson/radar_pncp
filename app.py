@@ -7,12 +7,10 @@ from flask_bcrypt import Bcrypt
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session, Response
 import requests  # Para chamar a API do IBGE
+from typing import Optional
 from markupsafe import Markup, escape
 from functools import wraps
 import shlex  # biblioteca padrão que entende aspas em strings
-# Para envio de e-mail
-import smtplib
-from email.mime.text import MIMEText
 from pydantic import BaseModel, EmailStr, ValidationError
 import os  # Para ler variáveis de ambiente
 from dotenv import load_dotenv  # Para carregar o arquivo .env
@@ -30,7 +28,7 @@ from logging.handlers import RotatingFileHandler # Para log rotate
 from decimal import Decimal # Para manipular números decimais do banco
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from werkzeug.middleware.proxy_fix import ProxyFix # Para lidar com proxies reversos (se necessário)
+from werkzeug.middleware.proxy_fix import ProxyFix
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 
 # --- Configurações ---
@@ -47,6 +45,7 @@ class ContatoSchema(BaseModel):
     email_usuario: EmailStr # Valida automaticamente se é um e-mail
     assunto_contato: str
     mensagem_contato: str
+    origem: Optional[str] = "mobile"  # Valor padrão se não fornecido
 
 # --- CONFIGURAÇÃO DO CACHE ---
 # Configura o cache para usar Redis, com um timeout padrão de 1 hora (3600 segundos)
@@ -254,6 +253,12 @@ def generate_unique_slug(conn, base_slug, table='posts'):
     return slug
 
 
+@limiter.exempt_when
+def is_exempt():
+    # Lista de IPs que não devem ter limite aplicado
+    exempt_ips = ["adicionaroutros ips aqui se quiser", "127.0.0.1", "45.167.53.69"] # IP para n ser bloqueado
+    return get_remote_address() in exempt_ips
+
 # --- Filtro personalizado nl2br para quebra de linha ---
 def nl2br_filter(value):
     if value is None:
@@ -362,51 +367,68 @@ def erro_interno_servidor(e):
 
 # --- Rota para Processar o Formulário de Contato ---
 @app.route('/api/contato', methods=['POST'])
-@limiter.limit("5 per hour") # Limite específico para esta rota (previne spam)
+@limiter.limit("5 per hour") 
 def api_processar_contato():
+    # --- BLOCO DE DEPURAÇÃO ---
+    app.logger.info(f"--- DEPURAÇÃO ROTA /api/contato (MAILGUN) ---")
     data = request.json
-
     logging.info(f"API Contato: Dados recebidos: {data}")
-    # Validação dos dados usando Pydantic. a ideia é garantir que os dados estejam corretos antes de prosseguir, alem de evitar injeção de código.
+
+    # --- VALIDAÇÃO (PYDANTIC) ---
     try:
-        # 1. Valida os dados de entrada usando o schema
         contato_data = ContatoSchema(**data)
-        
-        # 2. Usa os dados validados e limpos
         nome = contato_data.nome_contato
-        email_usuario = contato_data.email_usuario # Agora é garantido ser um e-mail válido
+        email_usuario = contato_data.email_usuario 
         assunto = contato_data.assunto_contato
         mensagem = contato_data.mensagem_contato
-
+        origem = contato_data.origem # <--- Captura a origem (web ou mobile)
     except ValidationError as e:
-        # Se a validação falhar, retorna um erro 400 claro
-        app.logger.warning(f"API Contato: Falha de validação. Dados: {data}. Erro: {e.errors()}")
+        app.logger.warning(f"API Contato: Falha de validação. Erro: {e.errors()}")
         return jsonify({'status': 'erro', 'mensagem': 'Dados inválidos.', 'detalhes': e.errors()}), 400
-    # --- FIM DA VALIDAÇÃO ---
 
+    # --- CONFIGURAÇÃO MAILGUN ---
+    mailgun_domain = os.getenv('MAILGUN_DOMAIN')
+    mailgun_api_key = os.getenv('MAILGUN_API_KEY')
     email_remetente = os.getenv('EMAIL_REMETENTE')
-    senha_remetente = os.getenv('SENHA_EMAIL_REMETENTE')
     email_destinatario = os.getenv('EMAIL_DESTINATARIO_FEEDBACK')
 
-    if not all([email_remetente, senha_remetente, email_destinatario]):
-        logging.error("API Contato: Variáveis de ambiente para e-mail não configuradas.")
-        return jsonify({'status': 'erro', 'mensagem': 'Erro técnico no servidor.'}), 500
+    # Verifica se as variáveis existem
+    if not all([mailgun_domain, mailgun_api_key, email_remetente, email_destinatario]):
+        logging.error("API Contato: Variáveis de ambiente do Mailgun não configuradas corretamente.")
+        return jsonify({'status': 'erro', 'mensagem': 'Erro técnico no servidor (configuração de e-mail).'}), 500
 
-    corpo_email = f"Nome: {nome}\nE-mail: {email_usuario}\nAssunto: {assunto}\n\nMensagem:\n{mensagem}"
-    msg = MIMEText(corpo_email)
-    msg['Subject'] = f'Novo Contato Radar PNCP: {assunto}'
-    msg['From'] = email_remetente
-    msg['To'] = email_destinatario
-    msg.add_header('reply-to', email_usuario)
+    # Monta a URL da API do Mailgun
+    request_url = f"https://api.mailgun.net/v3/{mailgun_domain}/messages"
 
+    # Corpo do e-mail
+    texto_email = f"Origem: {origem.upper()}\nNome: {nome}\nE-mail do Usuário: {email_usuario}\nAssunto Original: {assunto}\n\nMensagem:\n{mensagem}"
+    
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(email_remetente, senha_remetente)
-            server.sendmail(email_remetente, email_destinatario, msg.as_string())
-        return jsonify({'status': 'sucesso', 'mensagem': 'Mensagem enviada com sucesso!'}), 200
+        # --- ENVIO VIA REQUESTS (API) ---
+        response = requests.post(
+            request_url,
+            auth=("api", mailgun_api_key),
+            data={
+                "from": f"Finnd Licitações <{email_remetente}>",
+                "to": [email_destinatario],
+                "subject": f"Novo email - Finnd: {assunto}",
+                "text": texto_email,
+                "h:Reply-To": email_usuario  # Permite que você clique em "Responder" e vá para o usuário
+            }
+        )
+
+        # Verifica se o Mailgun aceitou (Status 200 OK)
+        if response.status_code == 200:
+            app.logger.info(f"E-mail enviado com sucesso. ID: {response.json().get('id')}")
+            return jsonify({'status': 'sucesso', 'mensagem': 'Mensagem enviada com sucesso!'}), 200
+        else:
+            # Se o Mailgun recusar, loga o motivo
+            app.logger.error(f"Erro Mailgun: Status {response.status_code} - {response.text}")
+            return jsonify({'status': 'erro', 'mensagem': 'Não foi possível enviar a mensagem. Tente novamente mais tarde.'}), 500
+
     except Exception as e:
-        logging.error(f"API Contato: Erro ao enviar e-mail: {e}")
-        return jsonify({'status': 'erro', 'mensagem': 'Não foi possível enviar a mensagem.'}), 500
+        logging.error(f"API Contato: Exceção ao conectar com Mailgun: {e}")
+        return jsonify({'status': 'erro', 'mensagem': 'Erro interno ao processar envio.'}), 500
 
  
 # ===========================================---- ROTAS BACKEND (API Principal) ----============================================ #
