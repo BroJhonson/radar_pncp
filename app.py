@@ -30,10 +30,16 @@ from logging.handlers import RotatingFileHandler # Para log rotate
 from decimal import Decimal # Para manipular números decimais do banco
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix # Para lidar com proxies reversos (se necessário)
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 
 # --- Configurações ---
 app = Flask(__name__, template_folder='templates') # O template_folder agora aponta para 'backend/templates/'
+
+# Configura o app para confiar nos cabeçalhos de proxy do Nginx
+# x_for=1 significa que ele vai confiar no primeiro IP da lista X-Forwarded-For
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# --- FIM DO BLOCO ---
 
 # --- Definição do Schema de Validação (Pydantic) ---
 class ContatoSchema(BaseModel):
@@ -360,6 +366,7 @@ def erro_interno_servidor(e):
 def api_processar_contato():
     data = request.json
 
+    logging.info(f"API Contato: Dados recebidos: {data}")
     # Validação dos dados usando Pydantic. a ideia é garantir que os dados estejam corretos antes de prosseguir, alem de evitar injeção de código.
     try:
         # 1. Valida os dados de entrada usando o schema
