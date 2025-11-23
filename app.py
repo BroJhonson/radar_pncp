@@ -253,10 +253,10 @@ def generate_unique_slug(conn, base_slug, table='posts'):
     return slug
 
 
-@limiter.exempt_when
+@limiter.request_filter
 def is_exempt():
     # Lista de IPs que não devem ter limite aplicado
-    exempt_ips = ["adicionaroutros ips aqui se quiser", "127.0.0.1", "45.167.53.69"] # IP para n ser bloqueado
+    exempt_ips = ["adicionaroutros ips aqui se quiser", "127.0.0.1", "45.167.53.69"] 
     return get_remote_address() in exempt_ips
 
 # --- Filtro personalizado nl2br para quebra de linha ---
