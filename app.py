@@ -103,7 +103,7 @@ def log_request_info():
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["200 per day", "50 per hour"], # Limite padrão para todas as rotas
+    default_limits=["150 per 5 minutes", "40 per minute"], # Limite padrão para todas as rotas
     storage_uri="redis://localhost:6379" # Use 'memory://' ou configure um Redis
 )
 # --- FIM DA CONFIGURAÇÃO DO RATE LIMITER ---
