@@ -1,3 +1,4 @@
+#arquivo: backend/run_update_status.sh
 #!/bin/bash
 
 # --- Configuração ---

@@ -1,3 +1,4 @@
+# arquivo: backend/run_reprocess.sh
 #!/bin/bash
 
 # --- Configuração ---

@@ -1,3 +1,4 @@
+# arquivo : backend/run_sync.sh
 #!/bin/bash
 
 # --- Configuração ---
