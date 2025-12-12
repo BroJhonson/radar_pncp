@@ -30,6 +30,60 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
+import firebase_admin
+from firebase_admin import credentials, messaging
+from firebase_admin import auth as firebase_auth
+
+# =========================================================================
+# ========================= FIREBASE ======================================
+# Decorator para proteger rotas da API com Token do Firebase
+def login_firebase_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # 1. Tenta pegar o cabeçalho Authorization
+        header = request.headers.get('Authorization')
+        if not header:
+            return jsonify({'erro': 'Token de autenticação não fornecido'}), 401
+        
+        # 2. Formato esperado: "Bearer <token>"
+        parts = header.split()
+        if len(parts) != 2 or parts[0].lower() != 'bearer':
+            return jsonify({'erro': 'Cabeçalho Authorization inválido'}), 401
+        
+        token = parts[1]
+        
+        try:
+            # 3. Valida o token com os servidores do Firebase
+            decoded_token = firebase_auth.verify_id_token(token)
+            uid = decoded_token['uid']
+            email = decoded_token.get('email', '')
+            
+            # Passa UID e Email para a função da rota
+            return f(uid, email, *args, **kwargs)
+            
+        except ValueError as e:
+            app.logger.warning(f"Token Firebase inválido: {e}")
+            return jsonify({'erro': 'Token inválido ou expirado'}), 401
+        except Exception as e:
+            app.logger.error(f"Erro na verificação do token: {e}")
+            return jsonify({'erro': 'Erro interno na autenticação'}), 500
+            
+    return decorated_function
+# Inicializa o Firebase (Só faz isso se ainda não tiver inicializado)
+try:
+    if not firebase_admin._apps:
+        # Caminho absoluto é mais seguro em VPS
+        cred_path = os.path.join(os.path.dirname(__file__), 'firebase_credentials.json')
+        cred = credentials.Certificate(cred_path)
+        firebase_admin.initialize_app(cred)
+        logging.info("Firebase Admin inicializado com sucesso.")
+except Exception as e:
+    logging.error(f"ERRO AO INICIAR FIREBASE: {e}")
+    # Decisão de projeto: Se o firebase falhar, a API sobe? 
+    # Sugiro deixar subir, senão derruba o site todo por erro de config de push.
+
+# ========================= FIM FIREBASE ================================
+# ========================================================================
 
 # --- Configurações ---
 app = Flask(__name__, template_folder='templates') # O template_folder agora aponta para 'backend/templates/'
@@ -305,7 +359,7 @@ def load_user(user_id):
 # =========================================================================
 # ROTAS DE AUTENTICAÇÃO E ADMINISTRAÇÃO de USUÁRIOS
 # =========================================================================
-@app.route('/login', methods=['GET', 'POST'])
+@app.route('/login', methods=['GET', 'POST'])   # Mudar para Login admin essa rota
 @limiter.limit("10 per minute") # Limite específico para esta rota (previne força bruta)
 def login():
     if current_user.is_authenticated:
@@ -1379,7 +1433,6 @@ def get_all_tags(cursor):
     cursor.execute("SELECT nome FROM tags ORDER BY nome")
     tags = cursor.fetchall()
     return jsonify(tags=tags)
-# ============================================================================
 
 admin.add_view(PostsView(name='Posts', endpoint='posts'))
 admin.add_view(CategoriaView(name='Categorias', endpoint='categorias'))
@@ -1387,6 +1440,353 @@ admin.add_view(TagView(name='Tags', endpoint='tags'))
 
 # ============= acaba aqui o Flask-Admin e rotas do admin ====================
 # ============================================================================
+
+# ============================================================================
+# ================  Rotas para Usuarios comuns e Notificações ================
+# Função auxiliar para converter listas em CSV (blinda contra formats diferentes)
+def list_to_csv(value):
+    """Garante que listas virem strings CSV e None vire None"""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return ",".join([str(v).strip() for v in value if v])
+    # Se já for string (como vem do seu Flutter .join), apenas limpa espaços extras
+    if isinstance(value, str):
+        if not value.strip(): return None
+        return value.strip()
+    return str(value)
+
+class RegistroDispositivoSchema(BaseModel):
+    email: Optional[str] = None
+    nome: Optional[str] = None
+    token_push: str
+    tipo_dispositivo: str  # 'mobile_android', 'mobile_ios', 'web_browser'
+    device_info: Optional[str] = None
+
+@app.route('/api/usuarios/sincronizar', methods=['POST'])
+@limiter.limit("20 per minute") # ISSO EVITA ABUSOS. Basicamente isso significa que um usuário pode chamar essa API no máximo 20 vezes por minuto.
+@login_firebase_required  # <--- Segurança ativada. # Usuário deve estar logado no Firebase.
+@with_db_cursor # Isso injeta o cursor do DB na função.
+def api_sincronizar_usuario(uid, email, cursor):
+    """
+    Registra/Atualiza o usuário e seu dispositivo.
+    Retorna o status PRO atualizado.
+    """
+    data = request.json
+    try:
+        dados = RegistroDispositivoSchema(**data)
+        
+        # 1. Garante Usuário na tabela (UPSERT)
+        # Se não existe, cria. Se existe, atualiza nome/email/data
+        cursor.execute("""
+            INSERT INTO usuarios_status (uid_externo, email, nome, created_at) 
+            VALUES (%s, %s, %s, NOW())
+            ON DUPLICATE KEY UPDATE email=VALUES(email), nome=VALUES(nome), updated_at=NOW()
+        """, (uid, email, dados.nome))
+        
+        # Pega o ID interno e o status PRO
+        cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
+        user_row = cursor.fetchone()
+        user_id = user_row['id']
+        is_pro = bool(user_row['is_pro'])
+        
+        # 2. Registra/Atualiza o Dispositivo e Token Push
+        # Importante: Um usuário pode ter vários dispositivos. 
+        # O UNIQUE KEY (usuario_id, token_push) no banco evita duplicatas do mesmo aparelho.
+        cursor.execute("""
+            INSERT INTO usuarios_dispositivos (usuario_id, tipo, token_push, device_info, updated_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON DUPLICATE KEY UPDATE updated_at=NOW(), device_info=VALUES(device_info)
+        """, (user_id, dados.tipo_dispositivo, dados.token_push, dados.device_info))
+        
+        # IMPORTANTE: Commit manual pois estamos fazendo escritas
+        cursor._connection.commit()
+        
+        return jsonify({
+            "status": "sucesso", 
+            "mensagem": "Sincronizado com sucesso.",
+            "is_pro": is_pro  # O App usa isso para liberar features
+        })
+
+    except ValidationError as e:
+        return jsonify({'erro': "Dados inválidos", 'detalhes': e.errors()}), 400
+    except Exception as e:
+        app.logger.error(f"Erro sincronizar usuário: {e}")
+        return jsonify({'erro': "Erro interno no servidor"}), 500
+# ============================================================================
+class AlertaSchema(BaseModel):
+    nome_alerta: str
+    uf: Optional[list[str] | str] = None 
+    municipio: Optional[list[str] | str] = None
+    modalidades: Optional[list[str] | str] = None
+    termos_inclusao: list[str] | str 
+    termos_exclusao: Optional[list[str] | str] = None
+    enviar_push: bool = True
+    enviar_email: bool = False
+    # enviar_whatsapp: bool = False # Implantar isso seria fantastico no futuro
+
+@app.route('/api/alertas', methods=['GET'])
+@login_firebase_required
+@with_db_cursor
+def listar_alertas(uid, email, cursor):
+    """Lista todos os alertas configurados pelo usuário"""
+    try:
+        # Busca ID do usuário
+        cursor.execute("SELECT id FROM usuarios_status WHERE uid_externo = %s", (uid,))
+        user_row = cursor.fetchone()
+        
+        if not user_row:
+            return jsonify([]), 200 # Usuário novo sem alertas
+
+        # Busca alertas ------------------------- ADICIONAR MODALIDADE AQUI E NO SQL !!!!!!!!!!! JA ADICIONEI NO APP
+        query = """
+            SELECT id, nome_alerta, uf, municipio, modalidades, termos_inclusao, termos_exclusao, enviar_push, created_at 
+            FROM preferencias_alertas 
+            WHERE usuario_id = %s AND ativo = TRUE
+            ORDER BY created_at DESC
+        """
+        cursor.execute(query, (user_row['id'],))
+        alertas = cursor.fetchall()
+        
+        return jsonify([formatar_para_json(a) for a in alertas])
+        
+    except Exception as e:
+        app.logger.error(f"Erro ao listar alertas: {e}")
+        return jsonify({'erro': 'Erro ao buscar alertas'}), 500
+
+@app.route('/api/alertas', methods=['POST'])
+@login_firebase_required
+@with_db_cursor
+def salvar_alerta(uid, email, cursor):
+    """Cria novo alerta com validação de Plano"""
+    data = request.json
+    try:
+        pref = AlertaSchema(**data) # Valida formato
+        
+        # 1. Verifica Usuário
+        cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
+        user_row = cursor.fetchone()
+        if not user_row:
+             return jsonify({"erro": "Usuário não encontrado."}), 404
+        
+        is_pro = user_row['is_pro'] # 0 ou 1
+        user_id = user_row['id']
+
+        # =========================================================
+        # 2. REGRA DE NEGÓCIO RIGOROSA
+        # =========================================================
+        
+        # Regra A: Usuário FREE não pode criar alerta NENHUM
+        if not is_pro:
+            return jsonify({
+                "erro": "Funcionalidade exclusiva PRO.",
+                "upgrade_required": True 
+            }), 403
+
+        # Regra B: Usuário PRO tem limite (ex: 2)
+        # Futuramente você pode checar "plano_plus" aqui para liberar mais
+        if is_pro:
+            cursor.execute("SELECT COUNT(*) as total FROM preferencias_alertas WHERE usuario_id = %s", (user_id,))
+            total_alertas = cursor.fetchone()['total']
+            
+            LIMIT_PRO = 2
+            if total_alertas >= LIMIT_PRO:
+                return jsonify({
+                    "erro": f"Você atingiu o limite de {LIMIT_PRO} alertas do seu plano."
+                }), 403
+        # =========================================================
+
+        # 3. Trata os dados (Garante que tudo vire string separada por virgula)
+        # O list_to_csv lida com o .join do Flutter
+        uf_str = list_to_csv(pref.uf)
+        muni_str = list_to_csv(pref.municipio)
+        modal_str = list_to_csv(pref.modalidades)
+        # Se o flutter mandou .join(' '), a gente aceita, mas recomenda .join(',')
+        
+        termos_inc_str = list_to_csv(pref.termos_inclusao)
+        termos_exc_str = list_to_csv(pref.termos_exclusao)
+        
+        # 4. Salva usando as variáveis tratadas
+        query = """
+            INSERT INTO preferencias_alertas 
+            (usuario_id, nome_alerta, uf, municipio, modalidades, termos_inclusao, termos_exclusao, enviar_push, ativo)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1)
+        """
+        cursor.execute(query, (
+            user_id, pref.nome_alerta, 
+            uf_str, muni_str, modal_str,
+            termos_inc_str, termos_exc_str, # <--- Passa as strings convertidas
+            pref.enviar_push
+        ))
+        cursor._connection.commit()
+        
+        return jsonify({"status": "sucesso", "id": cursor.lastrowid}), 201
+        
+    except ValidationError as e:
+        return jsonify({'erro': "Dados inválidos", 'detalhes': e.errors()}), 400
+    except Exception as e:
+        app.logger.error(f"Erro alerta: {e}")
+        return jsonify({'erro': "Erro interno."}), 500
+
+
+@app.route('/api/alertas/<int:alerta_id>', methods=['DELETE'])
+@login_firebase_required
+@with_db_cursor
+def deletar_alerta(uid, email, cursor, alerta_id):
+    """Remove (desativa) um alerta"""
+    try:
+        cursor.execute("SELECT id FROM usuarios_status WHERE uid_externo = %s", (uid,))
+        user_row = cursor.fetchone()
+        
+        if not user_row:
+             return jsonify({"erro": "Usuário não encontrado."}), 404
+
+        # Deleta apenas se pertencer ao usuário (Segurança!)
+        query = "DELETE FROM preferencias_alertas WHERE id = %s AND usuario_id = %s"
+        cursor.execute(query, (alerta_id, user_row['id']))
+        cursor._connection.commit()
+        
+        if cursor.rowcount > 0:
+            return jsonify({"status": "sucesso", "mensagem": "Alerta removido."})
+        else:
+            return jsonify({"erro": "Alerta não encontrado ou não pertence a você."}), 404
+            
+    except Exception as e:
+        app.logger.error(f"Erro ao deletar alerta: {e}")
+        return jsonify({'erro': "Erro interno."}), 500
+# Fim da logica de alertas e usuarios
+
+# ============================================================================
+# --- Rota para Sincronizar LICITAÇÕES Favoritos ---
+@app.route('/api/favoritos/sincronizar', methods=['POST'])
+@login_firebase_required
+@with_db_cursor
+def sincronizar_favoritos(uid, email, cursor):
+    data = request.json or {}
+    ids_locais = data.get('ids_locais', [])
+    
+    # 1. Busca Usuario
+    cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
+    user_row = cursor.fetchone()
+    if not user_row: return jsonify({"erro": "Usuario nao encontrado"}), 404
+    user_id = user_row['id']
+    
+    # 2. Verifica Limite (Ex: 100)
+    LIMITE_FAVORITOS = 100
+    cursor.execute("SELECT COUNT(*) as total FROM usuarios_Licitacoes_favoritas WHERE usuario_id = %s", (user_id,))
+    total_atual = cursor.fetchone()['total']
+    
+    # Se ja passou do limite, nao insere novos, mas devolve a lista existente
+    pode_inserir = total_atual < LIMITE_FAVORITOS
+
+    if ids_locais and pode_inserir:
+        # Filtra para nao estourar o limite na inserção em lote
+        espaco_restante = LIMITE_FAVORITOS - total_atual
+        ids_para_inserir = ids_locais[:espaco_restante]
+        
+        valores = [(user_id, pncp) for pncp in ids_para_inserir]
+        if valores:
+            cursor.executemany("INSERT IGNORE INTO usuarios_Licitacoes_favoritas (usuario_id, licitacao_pncp) VALUES (%s, %s)", valores)
+            cursor._connection.commit()
+
+    # 3. Retorna TUDO que está no banco para o app atualizar
+    cursor.execute("SELECT licitacao_pncp FROM usuarios_Licitacoes_favoritas WHERE usuario_id = %s", (user_id,))
+    todos = [row['licitacao_pncp'] for row in cursor.fetchall()]
+    
+    return jsonify({
+        "status": "sucesso", 
+        "favoritos_remotos": todos,
+        "limite_atingido": len(todos) >= LIMITE_FAVORITOS
+    })
+
+# --- Remoção Individual licitações favoritas ---
+@app.route('/api/favoritos/<path:pncp_id>', methods=['DELETE'])
+@login_firebase_required
+@with_db_cursor
+def remover_favorito(uid, email, cursor, pncp_id):
+    cursor.execute("SELECT id FROM usuarios_status WHERE uid_externo = %s", (uid,))
+    user_row = cursor.fetchone()
+    if not user_row: return jsonify({"erro": "Usuario"}), 404
+    
+    cursor.execute("DELETE FROM usuarios_Licitacoes_favoritas WHERE usuario_id = %s AND licitacao_pncp = %s", (user_row['id'], pncp_id))
+    cursor._connection.commit()
+    
+    return jsonify({"status": "sucesso"})
+
+# ============================================================================
+# --- Rota para Sincronizar Filtros Favoritos ---
+@app.route('/api/filtros_favoritos/sincronizar', methods=['POST'])
+@login_firebase_required
+@with_db_cursor
+def sincronizar_filtros_favoritos(uid, email, cursor):
+    data = request.json or {}
+    filtros_locais = data.get('filtros_locais', [])
+    
+    # 1. Busca Usuario
+    cursor.execute("SELECT id FROM usuarios_status WHERE uid_externo = %s", (uid,))
+    user_row = cursor.fetchone()
+    if not user_row: return jsonify({"erro": "Usuario nao encontrado"}), 404
+    user_id = user_row['id']
+    
+    # 2. Insere ou Atualiza os filtros que vieram do App
+    # (Upsert baseado no ID gerado no mobile)
+    for f in filtros_locais:
+        id_mobile = f.get('id')
+        nome = f.get('nome')
+        # O 'filtros' dentro do objeto é a configuração complexa (FiltrosAplicados)
+        # Precisamos converter para string JSON para salvar no banco de texto
+        import json
+        config_json = json.dumps(f.get('filtros', {}))
+        
+        cursor.execute("""
+            INSERT INTO usuarios_filtros_salvos (usuario_id, id_mobile, nome_filtro, configuracao_json, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON DUPLICATE KEY UPDATE 
+                nome_filtro = VALUES(nome_filtro),
+                configuracao_json = VALUES(configuracao_json),
+                updated_at = NOW()
+        """, (user_id, id_mobile, nome, config_json))
+    
+    cursor._connection.commit()
+
+    # 3. Retorna TODOS os filtros do banco para o App ficar igual
+    cursor.execute("SELECT id_mobile, nome_filtro, configuracao_json FROM usuarios_filtros_salvos WHERE usuario_id = %s", (user_id,))
+    rows = cursor.fetchall()
+    
+    filtros_remotos = []
+    import json
+    for row in rows:
+        filtros_remotos.append({
+            "id": row['id_mobile'],
+            "nome": row['nome_filtro'],
+            "filtros": json.loads(row['configuracao_json']) # Converte de volta texto p/ JSON
+        })
+    
+    return jsonify({
+        "status": "sucesso", 
+        "filtros_remotos": filtros_remotos
+    })
+
+# --- Rota para Deletar um Filtro Favorito Específico ---
+@app.route('/api/filtros_favoritos/<string:id_mobile>', methods=['DELETE'])
+@login_firebase_required
+@with_db_cursor
+def deletar_filtro_favorito(uid, email, cursor, id_mobile):
+    # 1. Busca Usuario
+    cursor.execute("SELECT id FROM usuarios_status WHERE uid_externo = %s", (uid,))
+    user_row = cursor.fetchone()
+    if not user_row: return jsonify({"erro": "Usuario"}), 404
+    
+    # 2. Deleta usando o ID gerado pelo mobile e o ID do usuário (segurança)
+    cursor.execute("DELETE FROM usuarios_filtros_salvos WHERE usuario_id = %s AND id_mobile = %s", (user_row['id'], id_mobile))
+    cursor._connection.commit()
+    
+    if cursor.rowcount > 0:
+        return jsonify({"status": "sucesso", "mensagem": "Filtro removido."})
+    else:
+        return jsonify({"erro": "Filtro não encontrado."}), 404
+# ============================================================================
+
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
