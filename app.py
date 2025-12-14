@@ -19,7 +19,7 @@ import io
 import re
 from flask import Response
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 import bleach
 from flask_cors import CORS
 from flask_caching import Cache
@@ -33,6 +33,9 @@ load_dotenv()  # Carrega as variáveis do arquivo .env para o ambiente
 import firebase_admin
 from firebase_admin import credentials, messaging
 from firebase_admin import auth as firebase_auth
+import hmac # Para comparação segura de senha
+import json
+import traceback
 
 # =========================================================================
 # ========================= FIREBASE ======================================
@@ -1437,9 +1440,216 @@ def get_all_tags(cursor):
 admin.add_view(PostsView(name='Posts', endpoint='posts'))
 admin.add_view(CategoriaView(name='Categorias', endpoint='categorias'))
 admin.add_view(TagView(name='Tags', endpoint='tags'))
-
 # ============= acaba aqui o Flask-Admin e rotas do admin ====================
 # ============================================================================
+
+# =========================================================================
+# ========================= ROTAS DE PAGAMENTO (REVENUECAT) ================
+# =========================================================================
+@app.route('/api/webhooks/revenuecat', methods=['POST'])
+@limiter.limit("100 per minute") # Isso na pratica faz com que ataques de força bruta sejam mitigados, pois so permite 300 reqs/min
+def revenuecat_webhook():
+    """
+    Webhook RevenueCat com segurança, idempotência e consistência de estado.
+    """
+
+    # ------------------------------------------------------------------
+    # 1. AUTENTICAÇÃO
+    # ------------------------------------------------------------------
+    auth_header = request.headers.get('Authorization', '')
+    expected_token = os.getenv('REVENUECAT_WEBHOOK_AUTH', '')
+
+    incoming_token = auth_header.split(' ')[1] if auth_header.startswith('Bearer ') else auth_header
+
+    if not incoming_token or not hmac.compare_digest(incoming_token, expected_token):
+        app.logger.warning("SECURITY: Webhook RevenueCat com token inválido")
+        return jsonify({"erro": "Não autorizado"}), 401
+
+    data = request.get_json(silent=True) or {}
+    event = data.get('event')
+
+    if not event:
+        return jsonify({"status": "Ignorado (payload inválido)"}), 200
+
+    # ------------------------------------------------------------------
+    # 2. EXTRAÇÃO DE DADOS
+    # ------------------------------------------------------------------
+    rc_event_id = event.get('id')
+    rc_event_type = event.get('type')
+    app_user_id = event.get('app_user_id')
+    product_id = event.get('product_id')
+    entitlement_id = event.get('entitlement_id')
+
+    purchased_at_ms = event.get('purchased_at_ms')
+    expiration_at_ms = event.get('expiration_at_ms')
+
+    if not rc_event_id or not app_user_id or not rc_event_type:
+        app.logger.warning("Webhook RC incompleto recebido")
+        return jsonify({"erro": "Dados obrigatórios ausentes"}), 400
+
+    def ms_to_utc(ms):
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc) if ms else None
+
+    dt_compra = ms_to_utc(purchased_at_ms)
+    dt_expiracao = ms_to_utc(expiration_at_ms)
+
+    # ------------------------------------------------------------------
+    # 3. BANCO + IDEMPOTÊNCIA
+    # ------------------------------------------------------------------
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"erro": "DB indisponível"}), 500
+
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        # Idempotência forte
+        cursor.execute(
+            "SELECT id FROM assinaturas_historico WHERE event_id = %s",
+            (rc_event_id,)
+        )
+        if cursor.fetchone():
+            app.logger.info(f"RC: Evento {rc_event_id} já processado")
+            return jsonify({"status": "Já processado"}), 200
+
+        # ------------------------------------------------------------------
+        # 4. GARANTE USUÁRIO
+        # ------------------------------------------------------------------
+        cursor.execute("""
+            INSERT IGNORE INTO usuarios_status (uid_externo, created_at)
+            VALUES (%s, NOW())
+        """, (app_user_id,))
+
+        cursor.execute("""
+            SELECT id FROM usuarios_status WHERE uid_externo = %s
+        """, (app_user_id,))
+        user = cursor.fetchone()
+        user_id = user['id']
+
+        # ------------------------------------------------------------------
+        # 5. LÓGICA DE ESTADO
+        # ------------------------------------------------------------------
+        eventos_ativam = {
+            'INITIAL_PURCHASE',
+            'RENEWAL',
+            'UNCANCELLATION',
+            'NON_RENEWING_PURCHASE',
+            'PRODUCT_CHANGE'
+        }
+
+        eventos_alerta = {
+            'CANCELLATION',
+            'BILLING_ISSUE'
+        }
+
+        eventos_expiram = {
+            'EXPIRATION'
+        }
+
+        novo_is_pro = None
+        novo_status = None
+
+        if rc_event_type in eventos_ativam:
+            novo_is_pro = 1
+            novo_status = 'active'
+
+        elif rc_event_type == 'CANCELLATION':
+            novo_is_pro = 1
+            novo_status = 'canceled'
+
+        elif rc_event_type == 'BILLING_ISSUE':
+            novo_is_pro = 1
+            novo_status = 'billing_issue'
+
+        elif rc_event_type in eventos_expiram:
+            novo_is_pro = 0
+            novo_status = 'expired'
+
+        # ------------------------------------------------------------------
+        # 6. UPDATE CONSOLIDADO DO USUÁRIO
+        # ------------------------------------------------------------------
+        if novo_status:
+            cursor.execute("""
+                UPDATE usuarios_status
+                SET
+                    is_pro = %s,
+                    status_assinatura = %s,
+                    data_expiracao_atual = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+            """, (
+                novo_is_pro,
+                novo_status,
+                dt_expiracao,
+                user_id
+            ))
+
+        # ------------------------------------------------------------------
+        # 7. HISTÓRICO (FONTE DA VERDADE)
+        # ------------------------------------------------------------------
+        cursor.execute("""
+            INSERT INTO assinaturas_historico
+            (
+                usuario_id,
+                uid_externo,
+                evento,
+                produto_id,
+                event_id,
+                entitlement_id,
+                data_compra,
+                data_expiracao,
+                json_original
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            user_id,
+            app_user_id,
+            rc_event_type,
+            product_id,
+            rc_event_id,
+            entitlement_id,
+            dt_compra,
+            dt_expiracao,
+            json.dumps(data)
+        ))
+
+        conn.commit()
+
+        app.logger.info(
+            f"RC OK | event={rc_event_type} | user={app_user_id} | event_id={rc_event_id}"
+        )
+
+        return jsonify({"status": "processado"}), 200
+
+    except Exception as e:
+        conn.rollback()
+        error_msg = str(e)
+        stack_trace = traceback.format_exc()
+        app.logger.error(f"CRITICAL RC ERROR | event_id={rc_event_id} | {error_msg}")
+
+        # --- ALERTA DE EMERGÊNCIA (MAILGUN) ---
+        # Se falhar o processamento, te avisa na hora para você não perder dinheiro/cliente.
+        try:
+            requests.post(
+                f"https://api.mailgun.net/v3/{os.getenv('MAILGUN_DOMAIN')}/messages",
+                auth=("api", os.getenv('MAILGUN_API_KEY')),
+                data={
+                    "from": f"Sistema Finnd <erro@{os.getenv('MAILGUN_DOMAIN')}>",
+                    "to": ["laysoftone@gmail.com"], # <--- Coloque seu email aqui
+                    "subject": f"⚠️ ERRO CRÍTICO: Webhook RevenueCat Falhou!",
+                    "text": f"O usuário {app_user_id} fez uma ação {rc_event_type} e o banco falhou.\n\nErro: {error_msg}\n\nTraceback:\n{stack_trace}"
+                },
+                timeout=5 # Não deixa travar se o mailgun demorar
+            )
+        except:
+            print("Falha ao enviar alerta de email.")
+        # ----------------------------------------
+        return jsonify({"erro": "Erro interno"}), 500
+
+    finally:
+        cursor.close()
+        conn.close()
+
 
 # ============================================================================
 # ================  Rotas para Usuarios comuns e Notificações ================
@@ -1525,6 +1735,51 @@ class AlertaSchema(BaseModel):
     enviar_email: bool = False
     # enviar_whatsapp: bool = False # Implantar isso seria fantastico no futuro
 
+# --- FUNÇÃO AUXILIAR PARA INSERIR NAS TABELAS NORMALIZADAS ---
+def _inserir_criterios_filhos(cursor, alerta_id, data):
+    """
+    Função auxiliar que insere os registros nas tabelas filhas (UFs, Termos, etc).
+    Usada tanto no CREATE quanto no EDIT.
+    """
+    
+    # Helper interno para inserção em lote
+    def inserir_lote(tabela, coluna, lista_valores, extra_col=None, extra_val=None):
+        if not lista_valores: return
+        
+        # Garante que é uma lista. 
+        # Se vier string "BA,SP" (legado/erro frontend), converte para lista.
+        # Se vier lista ["BA", "SP"] (correto), mantém.
+        if isinstance(lista_valores, str):
+            lista_valores = [x.strip() for x in lista_valores.split(',') if x.strip()]
+            
+        vals = []
+        # Monta a query dinamicamente
+        query = f"INSERT INTO {tabela} (alerta_id, {coluna}"
+        if extra_col: query += f", {extra_col}"
+        query += ") VALUES (%s, %s"
+        if extra_col: query += ", %s"
+        query += ")"
+
+        for item in lista_valores:
+            # Proteção básica contra strings vazias
+            if isinstance(item, str) and not item.strip():
+                continue
+
+            if extra_val:
+                vals.append((alerta_id, item, extra_val))
+            else:
+                vals.append((alerta_id, item))
+        
+        if vals:
+            cursor.executemany(query, vals)
+
+    # Executa as inserções para cada tipo de filtro
+    inserir_lote('alertas_ufs', 'uf', data.get('uf'))
+    inserir_lote('alertas_municipios', 'municipio_nome', data.get('municipio'))
+    inserir_lote('alertas_modalidades', 'modalidade_id', data.get('modalidades'))
+    inserir_lote('alertas_termos', 'termo', data.get('termos_inclusao'), 'tipo', 'INCLUSAO')
+    inserir_lote('alertas_termos', 'termo', data.get('termos_exclusao'), 'tipo', 'EXCLUSAO')
+
 @app.route('/api/alertas', methods=['GET'])
 @login_firebase_required
 @with_db_cursor
@@ -1558,75 +1813,123 @@ def listar_alertas(uid, email, cursor):
 @login_firebase_required
 @with_db_cursor
 def salvar_alerta(uid, email, cursor):
-    """Cria novo alerta com validação de Plano"""
+    """Cria novo alerta normalizado com validação de Plano"""
     data = request.json
     try:
-        pref = AlertaSchema(**data) # Valida formato
-        
-        # 1. Verifica Usuário
+        # 1. Validação Básica de Entrada
+        nome_alerta = data.get('nome_alerta', 'Meu Alerta')
+        enviar_push = data.get('enviar_push', True)
+
+        # 2. Busca Usuário e Status PRO
         cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
         user_row = cursor.fetchone()
         if not user_row:
              return jsonify({"erro": "Usuário não encontrado."}), 404
         
-        is_pro = user_row['is_pro'] # 0 ou 1
+        is_pro = bool(user_row['is_pro'])
         user_id = user_row['id']
 
         # =========================================================
-        # 2. REGRA DE NEGÓCIO RIGOROSA
+        # 3. REGRAS DE NEGÓCIO (Limites e Plano)
         # =========================================================
         
-        # Regra A: Usuário FREE não pode criar alerta NENHUM
+        # Regra A: Usuário FREE não pode criar alerta
         if not is_pro:
             return jsonify({
                 "erro": "Funcionalidade exclusiva PRO.",
                 "upgrade_required": True 
             }), 403
 
-        # Regra B: Usuário PRO tem limite (ex: 2)
-        # Futuramente você pode checar "plano_plus" aqui para liberar mais
-        if is_pro:
-            cursor.execute("SELECT COUNT(*) as total FROM preferencias_alertas WHERE usuario_id = %s", (user_id,))
-            total_alertas = cursor.fetchone()['total']
-            
-            LIMIT_PRO = 2
-            if total_alertas >= LIMIT_PRO:
-                return jsonify({
-                    "erro": f"Você atingiu o limite de {LIMIT_PRO} alertas do seu plano."
-                }), 403
+        # Regra B: Limite de alertas por usuário (Ex: 5)
+        # É importante manter um limite para não sobrecarregar o worker
+        LIMIT_PRO = 5 
+        cursor.execute("SELECT COUNT(*) as total FROM preferencias_alertas WHERE usuario_id = %s", (user_id,))
+        total_alertas = cursor.fetchone()['total']
+        
+        if total_alertas >= LIMIT_PRO:
+            return jsonify({
+                "erro": f"Você atingiu o limite de {LIMIT_PRO} alertas ativos."
+            }), 403
         # =========================================================
 
-        # 3. Trata os dados (Garante que tudo vire string separada por virgula)
-        # O list_to_csv lida com o .join do Flutter
-        uf_str = list_to_csv(pref.uf)
-        muni_str = list_to_csv(pref.municipio)
-        modal_str = list_to_csv(pref.modalidades)
-        # Se o flutter mandou .join(' '), a gente aceita, mas recomenda .join(',')
-        
-        termos_inc_str = list_to_csv(pref.termos_inclusao)
-        termos_exc_str = list_to_csv(pref.termos_exclusao)
-        
-        # 4. Salva usando as variáveis tratadas
-        query = """
+        # 4. Inserção do Alerta PAI
+        cursor.execute("""
             INSERT INTO preferencias_alertas 
-            (usuario_id, nome_alerta, uf, municipio, modalidades, termos_inclusao, termos_exclusao, enviar_push, ativo)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 1)
-        """
-        cursor.execute(query, (
-            user_id, pref.nome_alerta, 
-            uf_str, muni_str, modal_str,
-            termos_inc_str, termos_exc_str, # <--- Passa as strings convertidas
-            pref.enviar_push
-        ))
+            (usuario_id, nome_alerta, enviar_push, ativo)
+            VALUES (%s, %s, %s, 1)
+        """, (user_id, nome_alerta, enviar_push))
+        
+        alerta_id = cursor.lastrowid # Pega o ID gerado automaticamente
+
+        # 5. Inserção dos FILHOS (Usando a função auxiliar)
+        # Aqui a mágica acontece: distribui os dados nas tabelas normalizadas
+        _inserir_criterios_filhos(cursor, alerta_id, data)
+        
+        # 6. Commit final (Salva tudo ou nada)
         cursor._connection.commit()
         
-        return jsonify({"status": "sucesso", "id": cursor.lastrowid}), 201
+        return jsonify({"status": "sucesso", "id": alerta_id}), 201
         
-    except ValidationError as e:
-        return jsonify({'erro': "Dados inválidos", 'detalhes': e.errors()}), 400
     except Exception as e:
-        app.logger.error(f"Erro alerta: {e}")
-        return jsonify({'erro': "Erro interno."}), 500
+        app.logger.error(f"Erro ao criar alerta: {e}")
+        return jsonify({'erro': "Erro interno ao salvar alerta."}), 500
+    
+@app.route('/api/alertas/<int:alerta_id>', methods=['PUT'])
+@login_firebase_required
+@with_db_cursor
+def editar_alerta(uid, email, cursor, alerta_id):
+    data = request.json
+    try:
+        # 1. VERIFICAÇÃO DE SEGURANÇA (O alerta pertence a esse usuário?)
+        cursor.execute("""
+            SELECT pa.id 
+            FROM preferencias_alertas pa
+            JOIN usuarios_status u ON pa.usuario_id = u.id
+            WHERE pa.id = %s AND u.uid_externo = %s
+        """, (alerta_id, uid))
+        
+        if not cursor.fetchone():
+            return jsonify({"erro": "Alerta não encontrado ou acesso negado."}), 404
+
+        # 2. ATUALIZA A TABELA PAI (Nome, Status, Push)
+        nome_alerta = data.get('nome_alerta')
+        enviar_push = data.get('enviar_push')
+        # Se ativo não vier no JSON, mantemos o que está no banco ou definimos True? 
+        # Geralmente edição não muda o status 'ativo' a menos que explicitado.
+        # Vamos assumir que atualiza tudo que vier.
+        
+        cursor.execute("""
+            UPDATE preferencias_alertas 
+            SET nome_alerta = %s, enviar_push = %s, ativo = 1
+            WHERE id = %s
+        """, (nome_alerta, enviar_push, alerta_id))
+
+        # 3. ESTRATÉGIA "LIMPA" (Deleta todos os filhos antigos)
+        # Como configuramos ON DELETE CASCADE no banco, deletar o pai apagaria tudo.
+        # Mas aqui NÃO queremos deletar o pai (para manter o ID).
+        # Então deletamos manualmente os filhos.
+        
+        tabelas_filhas = [
+            'alertas_ufs', 
+            'alertas_municipios', 
+            'alertas_modalidades', 
+            'alertas_termos'
+        ]
+        
+        for tabela in tabelas_filhas:
+            cursor.execute(f"DELETE FROM {tabela} WHERE alerta_id = %s", (alerta_id,))
+
+        # 4. ESTRATÉGIA "REFAZ" (Insere os novos dados usando a função auxiliar)
+        _inserir_criterios_filhos(cursor, alerta_id, data)
+
+        # 5. COMMIT FINAL
+        cursor._connection.commit()
+
+        return jsonify({"status": "sucesso", "mensagem": "Alerta atualizado com sucesso."}), 200
+
+    except Exception as e:
+        app.logger.error(f"Erro ao editar alerta {alerta_id}: {e}")
+        return jsonify({'erro': "Erro interno ao atualizar alerta."}), 500
 
 
 @app.route('/api/alertas/<int:alerta_id>', methods=['DELETE'])

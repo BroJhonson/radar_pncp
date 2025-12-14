@@ -1,215 +1,229 @@
-# backend/worker_notificacoes.py
+# backend/worker_notificacoes.py (Versão 2.0 - Com filtro de Status e Município)
 import os
 import firebase_admin
 from firebase_admin import credentials, messaging
 from dotenv import load_dotenv
 import mysql.connector
 import logging
+import time
 
 load_dotenv()
 
-# LOGS
-LOG_PATH = os.path.join(os.path.dirname(__file__), '../logs/notificacoes.log')
-# Garante que a pasta existe
-if not os.path.exists(os.path.dirname(LOG_PATH)):
-    os.makedirs(os.path.dirname(LOG_PATH))
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - WORKER - %(message)s',
-    handlers=[logging.FileHandler(LOG_PATH), logging.StreamHandler()]
-)
+# Configuração de Logs
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# FIREBASE INIT
+# Firebase Init
 if not firebase_admin._apps:
-    try:
-        cred_path = os.path.join(os.path.dirname(__file__), '../firebase_credentials.json')
-        cred = credentials.Certificate(cred_path)
-        firebase_admin.initialize_app(cred)
-    except Exception as e:
-        logger.critical(f"ERRO CRÍTICO FIREBASE: {e}")
-        exit(1)
+    cred_path = os.path.join(os.path.dirname(__file__), 'firebase_credentials.json')
+    cred = credentials.Certificate(cred_path)
+    firebase_admin.initialize_app(cred)
 
 def get_db_connection():
     return mysql.connector.connect(
-        host=os.getenv('MARIADB_HOST'),
-        user=os.getenv('MARIADB_USER'),
-        password=os.getenv('MARIADB_PASSWORD'),
-        database=os.getenv('MARIADB_DATABASE')
+        host=os.getenv('MARIADB_HOST'), user=os.getenv('MARIADB_USER'),
+        password=os.getenv('MARIADB_PASSWORD'), database=os.getenv('MARIADB_DATABASE')
     )
 
-def verificar_match_complexo(licitacao, alerta):
+def resgatar_zumbis(cursor, conn):  # Função para resgatar licitações travadas
     """
-    Verifica se a licitação atende a TODOS os critérios do alerta (AND).
-    Dentro de cada critério (UF, Modalidade) é (OR).
+    Faxina de segurança: Procura licitações travadas no status 2
+    há mais de 15 minutos (crash do script) e reseta para 0.
     """
-
-    # 1. STATUS (Deve estar aberta)
-    # Lógica: Se status for diferente de recebendo proposta, rejeita.
-    status_real = (licitacao['situacaoReal'] or "").lower()
-    if "recebendo proposta" not in status_real:
-        return False
-
-    # 2. LOCALIZAÇÃO (UF) - Multi-seleção
-    # Alerta pode ter "BA,SP". Licitação tem "BA". (BA está em BA,SP? Sim)
-    if alerta['uf']:
-        lic_uf = (licitacao['unidadeOrgaoUfSigla'] or "").strip().upper()
-        # Cria lista ['BA', 'SP']
-        ufs_alvo = [u.strip().upper() for u in alerta['uf'].split(',') if u.strip()]
-        if lic_uf not in ufs_alvo:
-            return False
-
-    # 3. LOCALIZAÇÃO (MUNICÍPIO) - Multi-seleção
-    if alerta['municipio']:
-        lic_muni = (licitacao['unidadeOrgaoMunicipioNome'] or "").strip().lower()
-        munis_alvo = [m.strip().lower() for m in alerta['municipio'].split(',') if m.strip()]
-        # Nota: Comparação exata de string. Idealmente normalizar acentos se possível, mas direto funciona bem se os dados do IBGE forem padronizados.
-        if lic_muni not in munis_alvo:
-            return False
-
-    # 4. MODALIDADES - Multi-seleção
-    # O app pode salvar IDs (1, 2) ou Nomes (Pregão). Vamos comparar o que vier.
-    if alerta['modalidades']:
-        lic_mod_id = str(licitacao.get('modalidadeId', ''))
-        lic_mod_nome = (licitacao.get('modalidadeNome', '') or "").lower()
+    try:
+        # Define o tempo limite (ex: 15 minutos atrás)
+        # Se uma notificação demora mais que 15min para ser enviada, algo deu errado.
+        cursor.execute("""
+            UPDATE licitacoes 
+            SET notificacao_processada = 0, -- Volta para a fila
+                processamento_inicio = NULL 
+            WHERE notificacao_processada = 2 
+            AND processamento_inicio < DATE_SUB(NOW(), INTERVAL 15 MINUTE)
+        """)
         
-        mods_alvo = [m.strip().lower() for m in alerta['modalidades'].split(',') if m.strip()]
-        
-        # Match se bater ID ou se bater Nome (contido)
-        match_mod = False
-        for mod in mods_alvo:
-            if mod == lic_mod_id or mod in lic_mod_nome:
-                match_mod = True
-                break
-        
-        if not match_mod:
-            return False
-
-    # 5. TERMOS INCLUSÃO (Texto - OR)
-    lic_objeto = (licitacao['objetoCompra'] or "").lower()
-    
-    if not alerta['termos_inclusao']:
-        return False # Regra de segurança: alerta sem termo é ignorado
-    
-    termos_inc = [t.strip().lower() for t in alerta['termos_inclusao'].split(',') if t.strip()]
-    
-    # Verifica se ALGUM termo está presente no objeto
-    if not any(t in lic_objeto for t in termos_inc):
-        return False
-
-    # 6. TERMOS EXCLUSÃO (Texto - NOT OR)
-    if alerta['termos_exclusao']:
-        termos_exc = [t.strip().lower() for t in alerta['termos_exclusao'].split(',') if t.strip()]
-        # Verifica se ALGUM termo proibido está presente
-        if any(t in lic_objeto for t in termos_exc):
-            return False
-
-    # Passou por tudo!
-    return True
+        afetados = cursor.rowcount
+        if afetados > 0:
+            conn.commit()
+            logger.warning(f"🧟 ZUMBIS RESGATADOS: {afetados} licitações travadas foram resetadas.")
+            
+    except Exception as e:
+        logger.error(f"Erro ao resgatar zumbis: {e}")
 
 def processar_notificacoes():
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
-    # A. Busca Pendentes (Limit 300 por ciclo para segurança)
-    query_lic = """
-        SELECT id, numeroControlePNCP, objetoCompra, situacaoReal, 
-               unidadeOrgaoUfSigla, unidadeOrgaoMunicipioNome, valorTotalEstimado,
-               modalidadeId, modalidadeNome
+    # --- NOVO: RODA O RESGATE ANTES DE TUDO ---
+    resgatar_zumbis(cursor, conn)
+
+    # 1. LOCK: Marca licitações como "Processando" (Status 2)
+    # Pega até 200 por vez para não sobrecarregar
+    cursor.execute("""
+        UPDATE licitacoes 
+        SET notificacao_processada = 2, 
+            processamento_inicio = NOW() 
+        WHERE notificacao_processada = 0 
+        LIMIT 200
+    """)
+    conn.commit()
+
+    # 2. SELEÇÃO: Pega os dados das licitações travadas
+    cursor.execute("""
+        SELECT id, numeroControlePNCP, objetoCompra, valorTotalEstimado, situacaoReal,
+               unidadeOrgaoUfSigla, unidadeOrgaoMunicipioNome, modalidadeId
         FROM licitacoes 
-        WHERE notificacao_processada = 0
-        LIMIT 300
-    """
-    cursor.execute(query_lic)
+        WHERE notificacao_processada = 2
+    """)
     licitacoes = cursor.fetchall()
 
     if not licitacoes:
-        logger.info("Nenhuma licitação pendente.")
         cursor.close()
         conn.close()
         return
 
-    # B. Busca Alertas Ativos (E seus tokens)
-    query_alertas = """
-        SELECT pa.nome_alerta, pa.uf, pa.municipio, pa.modalidades, 
-               pa.termos_inclusao, pa.termos_exclusao,
-               d.token_push
+    logger.info(f"Analisando lote de {len(licitacoes)} licitações...")
+    mensagens_para_enviar = []
+
+    # 3. QUERY DE BUSCA REVERSA (Atualizada com Município)
+    query_match = """
+        SELECT DISTINCT 
+            d.token_push, 
+            at_inc.termo as termo_match
         FROM preferencias_alertas pa
-        JOIN usuarios_dispositivos d ON pa.usuario_id = d.usuario_id
         JOIN usuarios_status u ON pa.usuario_id = u.id
-        WHERE pa.ativo = 1 
-          AND pa.enviar_push = 1 
-          AND d.token_push IS NOT NULL
-          
-          -- REGRA CRÍTICA: Só envia se for PRO e assinatura estiver ok
-          AND u.is_pro = 1 
-          AND (u.status_assinatura = 'active' OR u.status_assinatura = 'trial')
-    """
-    cursor.execute(query_alertas)
-    alertas = cursor.fetchall()
+        JOIN usuarios_dispositivos d ON pa.usuario_id = d.usuario_id
+        
+        WHERE 
+            pa.ativo = 1 
+            AND pa.enviar_push = 1
+            AND u.is_pro = 1 
+            AND u.status_assinatura IN ('active', 'trial')
 
-    logger.info(f"Processando: {len(licitacoes)} licitações vs {len(alertas)} alertas.")
-    
-    mensagens = []
+            -- 1. Filtro de UF
+            AND (
+                NOT EXISTS (SELECT 1 FROM alertas_ufs WHERE alerta_id = pa.id)
+                OR EXISTS (SELECT 1 FROM alertas_ufs au WHERE au.alerta_id = pa.id AND au.uf = %s)
+            )
 
-    # C. Cruzamento
-    for lic in licitacoes:
-        for alerta in alertas:
-            if verificar_match_complexo(lic, alerta):
-                # Personalização da Mensagem
-                uf = lic['unidadeOrgaoUfSigla'] or "BR"
-                municipio = lic['unidadeOrgaoMunicipioNome'] or ""
-                valor = "R$ 0,00"
-                if lic['valorTotalEstimado']:
-                    try:
-                        valor = f"R$ {float(lic['valorTotalEstimado']):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                    except: pass
-                
-                # Tenta pegar o termo que deu match para o título ficar chamativo
-                # Ex: Se user quer "Trator, Pneu" e licitação tem "Pneu", título vira "Pneu..."
-                termos_inc = [t.strip().title() for t in alerta['termos_inclusao'].split(',')]
-                titulo_prefixo = termos_inc[0] # Pega o primeiro por padrão
-                
-                msg = messaging.Message(
-                    token=alerta['token_push'],
-                    notification=messaging.Notification(
-                        title=f"{titulo_prefixo} em {municipio}/{uf}",
-                        body=f"{lic['objetoCompra'][:100]}...\n{valor}"
-                    ),
-                    data={
-                        "click_action": "FLUTTER_NOTIFICATION_CLICK",
-                        "tipo": "nova_licitacao",
-                        "licitacao_id": str(lic['id']),
-                        "pncp": str(lic['numeroControlePNCP'])
-                    }
-                )
-                mensagens.append(msg)
+            -- 2. Filtro de Município (NOVO!)
+            -- Se o usuário não cadastrou municípios, ele quer o estado todo (NOT EXISTS)
+            -- Se cadastrou, a licitação tem que ser de um desses municípios (EXISTS)
+            AND (
+                NOT EXISTS (SELECT 1 FROM alertas_municipios WHERE alerta_id = pa.id)
+                OR EXISTS (SELECT 1 FROM alertas_municipios am 
+                           WHERE am.alerta_id = pa.id 
+                           AND am.municipio_nome = %s) -- Compara string exata (ou ajuste para LIKE se preferir)
+            )
 
-    # D. Envio em Massa
-    if mensagens:
-        try:
-            # Envia em lotes de 500 (limite Firebase)
-            total = len(mensagens)
-            logger.info(f"Enviando {total} notificações...")
+            -- 3. Filtro de Modalidade
+            AND (
+                NOT EXISTS (SELECT 1 FROM alertas_modalidades WHERE alerta_id = pa.id)
+                OR EXISTS (SELECT 1 FROM alertas_modalidades am WHERE am.alerta_id = pa.id AND am.modalidade_id = %s)
+            )
+
+            -- 4. Filtro de Termos (Inclusão - Obrigatório ter 1)
+            AND EXISTS (
+                SELECT 1 FROM alertas_termos at 
+                WHERE at.alerta_id = pa.id 
+                AND at.tipo = 'INCLUSAO'
+                AND INSTR(%s, at.termo) > 0 
+            )
             
-            for i in range(0, total, 500):
-                batch = mensagens[i:i+500]
-                response = messaging.send_each(batch)
-                logger.info(f"Lote {i}: {response.success_count} enviados, {response.failure_count} falhas.")
-                
-        except Exception as e:
-            logger.error(f"Erro envio Firebase: {e}")
+            -- 5. Filtro de Termos (Exclusão - Não pode ter nenhum)
+            AND NOT EXISTS (
+                SELECT 1 FROM alertas_termos at 
+                WHERE at.alerta_id = pa.id 
+                AND at.tipo = 'EXCLUSAO'
+                AND INSTR(%s, at.termo) > 0
+            )
+            
+            -- Join para pegar o termo que deu match (para o título do push)
+            LEFT JOIN alertas_termos at_inc ON at_inc.alerta_id = pa.id 
+                AND at_inc.tipo = 'INCLUSAO' 
+                AND INSTR(%s, at_inc.termo) > 0
+            LIMIT 1000
+    """
 
-    # E. Atualiza Flag (Sempre, mesmo se não enviou nada)
-    ids = [l['id'] for l in licitacoes]
-    if ids:
-        format_str = ','.join(['%s'] * len(ids))
-        cursor.execute(f"UPDATE licitacoes SET notificacao_processada = 1 WHERE id IN ({format_str})", tuple(ids))
+    for lic in licitacoes:
+        # --- A. FILTRO DE STATUS (Evita notificar coisa velha/cancelada) ---
+        # Ajuste essa lista conforme os status exatos do PNCP
+        status_valido = False
+        status_real = (lic['situacaoReal'] or "").lower()
+        
+        # Termos que indicam que vale a pena avisar
+        termos_aceitos = ['a receber/recebendo proposta', 'recebendo proposta']
+        
+        for termo in termos_aceitos:
+            if termo in status_real:
+                status_valido = True
+                break
+        
+        # Se o status for ruim (ex: "Fracassada", "Cancelada"), pulamos o envio
+        # Mas ela continuará no fluxo para ser marcada como 'processada' no final
+        if not status_valido:
+            continue 
+
+        # --- B. PREPARAÇÃO DADOS ---
+        objeto = (lic['objetoCompra'] or "").lower()
+        uf = (lic['unidadeOrgaoUfSigla'] or "")
+        municipio = (lic['unidadeOrgaoMunicipioNome'] or "") # Importante manter case original ou padronizar
+        mod_id = lic['modalidadeId']
+
+        # --- C. EXECUTA O MATCH ---
+        # Parâmetros: UF, MUNICIPIO, MOD_ID, OBJETO, OBJETO, OBJETO
+        cursor.execute(query_match, (uf, municipio, mod_id, objeto, objeto, objeto))
+        destinatarios = cursor.fetchall()
+
+        for dest in destinatarios:
+            token = dest['token_push']
+            termo_usado = (dest['termo_match'] or "Licitação").title()
+            
+            val_est = ""
+            if lic['valorTotalEstimado']:
+                 val_est = f"R$ {float(lic['valorTotalEstimado']):,.2f}"
+
+            msg = messaging.Message(
+                token=token,
+                notification=messaging.Notification(
+                    title=f"{termo_usado} em {municipio}/{uf}",
+                    body=f"{status_real.title()} | {val_est}\n{lic['objetoCompra'][:80]}..."
+                ),
+                data={
+                    "click_action": "FLUTTER_NOTIFICATION_CLICK",
+                    "pncp": str(lic['numeroControlePNCP']),
+                    "licitacao_id": str(lic['id'])
+                }
+            )
+            mensagens_para_enviar.append(msg)
+
+    # 4. ENVIO EM LOTE
+    if mensagens_para_enviar:
+        logger.info(f"Enviando {len(mensagens_para_enviar)} notificações...")
+        # Lotes de 500 (Limite Firebase)
+        for i in range(0, len(mensagens_para_enviar), 500):
+            try:
+                messaging.send_each(mensagens_para_enviar[i:i+500])
+            except Exception as e:
+                logger.error(f"Erro batch: {e}")
+
+    # 5. FINALIZAÇÃO
+    # Marca TODAS as licitações lidas (mesmo as de status inválido) como processadas
+    ids_processados = [l['id'] for l in licitacoes]
+    if ids_processados:
+        format_strings = ','.join(['%s'] * len(ids_processados))
+        cursor.execute(f"UPDATE licitacoes SET notificacao_processada = 1, processamento_inicio = NULL WHERE id IN ({format_strings})", tuple(ids_processados))
         conn.commit()
 
     cursor.close()
     conn.close()
 
 if __name__ == "__main__":
-    processar_notificacoes()
+    while True:
+        try:
+            processar_notificacoes()
+        except Exception as e:
+            logger.error(f"Erro fatal no loop: {e}")
+            # Importante: Se der erro de conexão DB, espera um pouco mais
+            time.sleep(30)
+        
+        time.sleep(10)

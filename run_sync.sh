@@ -35,7 +35,7 @@ python sync_api.py
 # Verifica status de saída do python anterior. Só roda notificação se sync foi OK.
 if [ $? -eq 0 ]; then
     echo "--- Sync finalizado com sucesso em $(date). Iniciando Processamento de Notificações... ---"
-    python worker_notificacoes.py
+    python notificacoes.py
 else
     echo "--- Sync falhou. Pulando notificações. ---"
 fi
