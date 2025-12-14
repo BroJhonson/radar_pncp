@@ -36,6 +36,7 @@ from firebase_admin import auth as firebase_auth
 import hmac # Para comparação segura de senha
 import json
 import traceback
+import hashlib
 
 # =========================================================================
 # ========================= FIREBASE ======================================
@@ -43,33 +44,50 @@ import traceback
 def login_firebase_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        # 1. Tenta pegar o cabeçalho Authorization
+        # 1. Pega e valida o cabeçalho
         header = request.headers.get('Authorization')
-        if not header:
-            return jsonify({'erro': 'Token de autenticação não fornecido'}), 401
+        if not header or not header.startswith('Bearer '):
+            return jsonify({'erro': 'Token de autenticação inválido ou ausente'}), 401
         
-        # 2. Formato esperado: "Bearer <token>"
-        parts = header.split()
-        if len(parts) != 2 or parts[0].lower() != 'bearer':
-            return jsonify({'erro': 'Cabeçalho Authorization inválido'}), 401
+        token = header.split(' ')[1]
         
-        token = parts[1]
-        
+        # --- LÓGICA DE CACHE ---
+        # Cria uma chave segura e curta usando hash SHA256 do token
         try:
-            # 3. Valida o token com os servidores do Firebase
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            cache_key = f"firebase_token_{token_hash}"
+            
+            # Tenta pegar do Redis
+            cached_user_info = cache.get(cache_key)
+            
+            if cached_user_info:
+                # Cache HIT: Usuário já validado recentemente
+                uid = cached_user_info['uid']
+                email = cached_user_info['email']
+                # (Opcional) Descomente se quiser ver no log quando o cache funciona
+                # app.logger.info(f"Auth Cache HIT: {uid}") 
+                return f(uid, email, *args, **kwargs)
+
+            # --- Cache MISS: Valida com o Google ---
             decoded_token = firebase_auth.verify_id_token(token)
             uid = decoded_token['uid']
             email = decoded_token.get('email', '')
             
-            # Passa UID e Email para a função da rota
-            return f(uid, email, *args, **kwargs)
+            # Salva no Cache por 50 minutos (3000s)
+            # Tokens duram 1h (3600s), então 50min é uma margem segura
+            user_info_to_cache = {'uid': uid, 'email': email}
+            cache.set(cache_key, user_info_to_cache, timeout=3000)
             
+            # app.logger.info(f"Auth Cache MISS: {uid} (Validado e Salvo)")
+            
+            return f(uid, email, *args, **kwargs)
+
         except ValueError as e:
-            app.logger.warning(f"Token Firebase inválido: {e}")
+            app.logger.warning(f"Token Firebase rejeitado: {e}")
             return jsonify({'erro': 'Token inválido ou expirado'}), 401
         except Exception as e:
-            app.logger.error(f"Erro na verificação do token: {e}")
-            return jsonify({'erro': 'Erro interno na autenticação'}), 500
+            app.logger.error(f"Erro interno Auth: {e}")
+            return jsonify({'erro': 'Erro interno de autenticação'}), 500
             
     return decorated_function
 # Inicializa o Firebase (Só faz isso se ainda não tiver inicializado)
@@ -134,7 +152,7 @@ file_handler.setLevel(logging.INFO) # Em produção, INFO é um bom nível. Para
 app.logger.addHandler(file_handler)
 app.logger.setLevel(logging.INFO)
 
-app.logger.info('Aplicação Radar PNCP iniciada')
+app.logger.info('Aplicação FINND iniciada')
 # --- FIM DA CONFIGURAÇÃO DE LOGGING ---
 
 # --- LOG PARA SABER QUAL URL RECEBEMOS ---

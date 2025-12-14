@@ -27,17 +27,7 @@ $(tail -n 20 "$LOG_FILE")"
 # --- Execução Principal ---
 trap 'handle_error $LINENO' ERR
 cd "$APP_DIR" || exit
-
 echo "--- [CRON WRAPPER] Iniciando sync em $(date) ---"
 source venv/bin/activate > /dev/null 2>&1
 python sync_api.py
-
-# Verifica status de saída do python anterior. Só roda notificação se sync foi OK.
-if [ $? -eq 0 ]; then
-    echo "--- Sync finalizado com sucesso em $(date). Iniciando Processamento de Notificações... ---"
-    python notificacoes.py
-else
-    echo "--- Sync falhou. Pulando notificações. ---"
-fi
-
-echo "--- Processo finalizado em $(date) ---"
+echo "--- [CRON WRAPPER] Sync finalizado com sucesso em $(date) ---"
