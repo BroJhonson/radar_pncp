@@ -271,9 +271,9 @@ def with_db_cursor(func):
                 app.logger.error(f"Falha de conexão em {func.__name__}")
                 return jsonify(erro="Falha de conexão com o banco de dados."), 503
             
-            # Passa o cursor para a função
             cursor = conn.cursor(dictionary=True)
-            return func(cursor=cursor, *args, **kwargs)
+            
+            return func(*args, cursor=cursor, **kwargs)
             
         except mysql.connector.Error as err:
             app.logger.error(f"Erro de DB em {func.__name__}: {err}")
@@ -867,9 +867,8 @@ def api_get_municipios_ibge(uf_sigla):
         return jsonify({"erro": f"Erro de conexão com API do IBGE: {e}", "status_code": 503}), 503
     except ValueError:
         return jsonify({"erro": "Resposta inválida (JSON) da API do IBGE.", "status_code": 500}), 500
-    
-    #return jsonify([{"exemplo": f"municipios de {uf_sigla}"}]) # Placeholder
-           
+
+
 # EXPORTAR CSV - Mantendo separado de def get_licitacoes() sem refatorar posso enviar mais coisas ou menos. 
 @app.route('/api/exportar-csv')
 def exportar_csv():
@@ -973,8 +972,6 @@ def exportar_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment;filename=radar_pncp_licitacoes.csv"}
     )
-    return Response(output, mimetype="text/csv", headers={"Content-Disposition":"attachment;filename=export.csv"})
-
 
 # ===============================================================
 # =================== Rotas para posts do blog ==================
@@ -1668,21 +1665,112 @@ def revenuecat_webhook():
         cursor.close()
         conn.close()
 
+# Função para verificação ativa do status PRO via API RevenueCat
+def verificar_status_revenuecat_agora(uid):
+    """
+    Consulta direta à API da RevenueCat.
+    Retorna True se for PRO, False se for Free.
+    Atualiza o banco local automaticamente se houver divergência.
+    """
+    rc_key = os.getenv('REVENUECAT_API_KEY')
+    if not rc_key:
+        app.logger.error("REVENUECAT_API_KEY não configurada no .env")
+        return False 
 
+    try:
+        # Chama a API da RevenueCat
+        url = f"https://api.revenuecat.com/v1/subscribers/{uid}"
+        headers = {
+            "Authorization": f"Bearer {rc_key}",
+            "Content-Type": "application/json"
+        }
+        
+        # Timeout curto (3s) para não travar a requisição do usuário
+        response = requests.get(url, headers=headers, timeout=3)
+        
+        if response.status_code == 200:
+            data = response.json()
+            entitlements = data.get('subscriber', {}).get('entitlements', {})
+            
+            # Verifica se há algum entitlement ativo (sem data de expiração ou data futura)
+            is_pro_rc = False
+            for ent_name, ent_data in entitlements.items():
+                expires = ent_data.get('expires_date')
+                if expires:
+                    # Converte string ISO para datetime com timezone UTC
+                    dt_expires = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+                    if dt_expires > datetime.now(timezone.utc):
+                        is_pro_rc = True
+                        break
+                else:
+                    # Sem data de expiração = Vitalício/Ativo
+                    is_pro_rc = True
+                    break
+            
+            # SE O REVENUECAT DIZ QUE É PRO, ATUALIZAMOS O BANCO AGORA
+            if is_pro_rc:
+                conn = get_db_connection()
+                if conn:
+                    try:
+                        c = conn.cursor()
+                        # Atualiza para PRO e status 'active'
+                        c.execute("UPDATE usuarios_status SET is_pro = 1, status_assinatura = 'active', updated_at = NOW() WHERE uid_externo = %s", (uid,))
+                        conn.commit()
+                        app.logger.info(f"AUTO-REPAIR: Usuário {uid} corrigido para PRO via verificação ativa.")
+                    except Exception as ex:
+                        app.logger.error(f"Erro ao atualizar banco no Auto-Repair: {ex}")
+                    finally:
+                        conn.close()
+            
+            return is_pro_rc
+            
+    except Exception as e:
+        app.logger.error(f"Erro ao verificar RevenueCat API: {e}")
+        return False # Na dúvida, segue o que estava no banco
+    
+    return False
 # ============================================================================
+
 # ================  Rotas para Usuarios comuns e Notificações ================
 # Função auxiliar para converter listas em CSV (blinda contra formats diferentes)
 def list_to_csv(value):
-    """Garante que listas virem strings CSV e None vire None"""
-    if value is None:
-        return None
+    """Converte lista em string CSV para salvar no banco."""
+    if value is None: return None
     if isinstance(value, list):
         return ",".join([str(v).strip() for v in value if v])
-    # Se já for string (como vem do seu Flutter .join), apenas limpa espaços extras
     if isinstance(value, str):
-        if not value.strip(): return None
-        return value.strip()
+        return value.strip() if value.strip() else None
     return str(value)
+
+def _inserir_criterios_filhos(cursor, alerta_id, data):
+    """Insere os detalhes normalizados do alerta (UFs, Termos, etc)."""
+    
+    def inserir_lote(tabela, coluna, lista_valores, extra_col=None, extra_val=None):
+        if not lista_valores: return
+        
+        lista_final = []
+        if isinstance(lista_valores, list): lista_final = lista_valores
+        elif isinstance(lista_valores, str): 
+            lista_final = [x.strip() for x in lista_valores.split(',') if x.strip()]
+            
+        vals = []
+        # Monta a query dinamicamente
+        query = f"INSERT INTO {tabela} (alerta_id, {coluna}" + (f", {extra_col}" if extra_col else "") + ") VALUES (%s, %s" + (", %s" if extra_col else "") + ")"
+
+        for item in lista_final:
+            item_limpo = str(item).strip().replace('"', '').replace("'", "")
+            if not item_limpo: continue
+            
+            if extra_val: vals.append((alerta_id, item_limpo, extra_val))
+            else: vals.append((alerta_id, item_limpo))
+        
+        if vals: cursor.executemany(query, vals)
+
+    inserir_lote('alertas_ufs', 'uf', data.get('uf'))
+    inserir_lote('alertas_municipios', 'municipio_nome', data.get('municipio'))
+    inserir_lote('alertas_modalidades', 'modalidade_id', data.get('modalidades'))
+    inserir_lote('alertas_termos', 'termo', data.get('termos_inclusao'), 'tipo', 'INCLUSAO')
+    inserir_lote('alertas_termos', 'termo', data.get('termos_exclusao'), 'tipo', 'EXCLUSAO')
 
 class RegistroDispositivoSchema(BaseModel):
     email: Optional[str] = None
@@ -1695,52 +1783,74 @@ class RegistroDispositivoSchema(BaseModel):
 @limiter.limit("20 per minute") # ISSO EVITA ABUSOS. Basicamente isso significa que um usuário pode chamar essa API no máximo 20 vezes por minuto.
 @login_firebase_required  # <--- Segurança ativada. # Usuário deve estar logado no Firebase.
 @with_db_cursor # Isso injeta o cursor do DB na função.
-def api_sincronizar_usuario(uid, email, cursor):
-    """
-    Registra/Atualiza o usuário e seu dispositivo.
-    Retorna o status PRO atualizado.
-    """
+def salvar_alerta(uid, email, cursor):
     data = request.json
+    if not data: 
+        app.logger.warning(f"Requisição inválida para /api/alertas/criar por {uid}. Não veio JSON, ou veio vazio.")
+        return jsonify({'erro': "JSON inválido"}), 400
+    
     try:
-        dados = RegistroDispositivoSchema(**data)
-        
-        # 1. Garante Usuário na tabela (UPSERT)
-        # Se não existe, cria. Se existe, atualiza nome/email/data
-        cursor.execute("""
-            INSERT INTO usuarios_status (uid_externo, email, nome, created_at) 
-            VALUES (%s, %s, %s, NOW())
-            ON DUPLICATE KEY UPDATE email=VALUES(email), nome=VALUES(nome), updated_at=NOW()
-        """, (uid, email, dados.nome))
-        
-        # Pega o ID interno e o status PRO
+        nome_alerta = data.get('nome_alerta', 'Alerta Personalizado')
+        enviar_push = data.get('enviar_push', True)
+        enviar_email = data.get('enviar_email', False) 
+
+        # 1. Busca Usuário no Banco
         cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
         user_row = cursor.fetchone()
+        
+        # --- AUTO-REPAIR 1: Usuário não existe no banco ---
+        if not user_row:
+            app.logger.warning(f"ALERTA: UID {uid} não encontrado. Criando placeholder.")
+            # CORREÇÃO 1: INSERT IGNORE evita erro se o usuário for criado por outra thread no mesmo ms
+            cursor.execute("INSERT IGNORE INTO usuarios_status (uid_externo, email, created_at, is_pro) VALUES (%s, %s, NOW(), 0)", (uid, email))
+            # Busca novamente
+            cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
+            user_row = cursor.fetchone()
+        # --------------------------------------------------
+        
         user_id = user_row['id']
         is_pro = bool(user_row['is_pro'])
-        
-        # 2. Registra/Atualiza o Dispositivo e Token Push
-        # Importante: Um usuário pode ter vários dispositivos. 
-        # O UNIQUE KEY (usuario_id, token_push) no banco evita duplicatas do mesmo aparelho.
+
+        # --- AUTO-REPAIR 2: O TIRA TEIMA (Se consta como Free) ---
+        if not is_pro:
+            app.logger.info(f"Usuario {uid} consta como FREE. Iniciando verificação ativa na RevenueCat...")
+            
+            # Chama o Helper
+            is_pro_real = verificar_status_revenuecat_agora(uid)
+            
+            if is_pro_real:
+                is_pro = True # Libera para esta execução
+                app.logger.info("RevenueCat confirmou PRO. Acesso liberado.")
+            else:
+                app.logger.info("RevenueCat confirmou FREE. Acesso negado.")
+                return jsonify({"erro": "Funcionalidade exclusiva para assinantes PRO.", "upgrade_required": True}), 403
+        # ---------------------------------------------------------
+
+        # Validação de Limite (Se chegou aqui, ou era PRO ou o Tira Teima liberou)
+        LIMIT_PRO = 3
+        cursor.execute("SELECT COUNT(*) as total FROM preferencias_alertas WHERE usuario_id = %s", (user_id,))
+        if cursor.fetchone()['total'] >= LIMIT_PRO:
+            return jsonify({"erro": f"Limite de {LIMIT_PRO} alertas atingido."}), 403
+
+        # Insere Pai (CORREÇÃO 2: Adicionado enviar_email)
         cursor.execute("""
-            INSERT INTO usuarios_dispositivos (usuario_id, tipo, token_push, device_info, updated_at)
-            VALUES (%s, %s, %s, %s, NOW())
-            ON DUPLICATE KEY UPDATE updated_at=NOW(), device_info=VALUES(device_info)
-        """, (user_id, dados.tipo_dispositivo, dados.token_push, dados.device_info))
+            INSERT INTO preferencias_alertas (usuario_id, nome_alerta, enviar_push, enviar_email, ativo) 
+            VALUES (%s, %s, %s, %s, 1)
+        """, (user_id, nome_alerta, enviar_push, enviar_email))
         
-        # IMPORTANTE: Commit manual pois estamos fazendo escritas
+        alerta_id = cursor.lastrowid 
+
+        _inserir_criterios_filhos(cursor, alerta_id, data)
         cursor._connection.commit()
         
-        return jsonify({
-            "status": "sucesso", 
-            "mensagem": "Sincronizado com sucesso.",
-            "is_pro": is_pro  # O App usa isso para liberar features
-        })
-
-    except ValidationError as e:
-        return jsonify({'erro': "Dados inválidos", 'detalhes': e.errors()}), 400
+        return jsonify({"status": "sucesso", "id": alerta_id}), 201
+        
     except Exception as e:
-        app.logger.error(f"Erro sincronizar usuário: {e}")
-        return jsonify({'erro': "Erro interno no servidor"}), 500
+        app.logger.error(f"Erro criar alerta: {e}")
+        # Importante: logar o traceback para debug
+        app.logger.error(traceback.format_exc())
+        return jsonify({'erro': "Erro interno no servidor."}), 500
+
 # ============================================================================
 class AlertaSchema(BaseModel):
     nome_alerta: str
@@ -1753,46 +1863,6 @@ class AlertaSchema(BaseModel):
     enviar_email: bool = False
     # enviar_whatsapp: bool = False # Implantar isso seria fantastico no futuro
 
-# --- FUNÇÃO AUXILIAR PARA INSERIR NAS TABELAS NORMALIZADAS ---
-def _inserir_criterios_filhos(cursor, alerta_id, data):
-    """
-    Função auxiliar que insere os registros nas tabelas filhas (UFs, Termos, etc).
-    """
-    
-    # Helper interno para inserção em lote
-    def inserir_lote(tabela, coluna, lista_valores, extra_col=None, extra_val=None):
-        if not lista_valores: return
-        
-        # Garante lista: "BA,SP" vira ["BA", "SP"]
-        if isinstance(lista_valores, str):
-            lista_valores = [x.strip() for x in lista_valores.split(',') if x.strip()]
-            
-        vals = []
-        query = f"INSERT INTO {tabela} (alerta_id, {coluna}"
-        if extra_col: query += f", {extra_col}"
-        query += ") VALUES (%s, %s"
-        if extra_col: query += ", %s"
-        query += ")"
-
-        for item in lista_valores:
-            if isinstance(item, str) and not item.strip(): continue
-
-            if extra_val:
-                vals.append((alerta_id, str(item).strip(), extra_val))
-            else:
-                vals.append((alerta_id, str(item).strip()))
-        
-        if vals:
-            cursor.executemany(query, vals)
-
-    # Executa as inserções
-    inserir_lote('alertas_ufs', 'uf', data.get('uf'))
-    inserir_lote('alertas_municipios', 'municipio_nome', data.get('municipio'))
-    inserir_lote('alertas_modalidades', 'modalidade_id', data.get('modalidades'))
-    
-    # ATENÇÃO: Verifique se no JSON vem 'termos_inclusao' ou 'termo_inclusao'
-    inserir_lote('alertas_termos', 'termo', data.get('termos_inclusao'), 'tipo', 'INCLUSAO')
-    inserir_lote('alertas_termos', 'termo', data.get('termos_exclusao'), 'tipo', 'EXCLUSAO')
 
 # --- ROTA LISTAR (GET) - CORRIGIDA PARA O NOVO BANCO ---
 @app.route('/api/alertas', methods=['GET'])
@@ -1800,7 +1870,7 @@ def _inserir_criterios_filhos(cursor, alerta_id, data):
 @with_db_cursor
 def listar_alertas(uid, email, cursor):
     """
-    Lista alertas reconstruindo as strings (Group Concat) para o Frontend
+    Lista alertas convertendo as strings CSV do banco de volta para Listas JSON
     """
     try:
         cursor.execute("SELECT id FROM usuarios_status WHERE uid_externo = %s", (uid,))
@@ -1813,27 +1883,12 @@ def listar_alertas(uid, email, cursor):
         # juntá-los com vírgula e entregar pronto para o App Mobile.
         query = """
             SELECT 
-                pa.id, 
-                pa.nome_alerta, 
-                pa.enviar_push, 
-                pa.created_at,
-                pa.ativo,
-                
-                -- Reconstrói a lista de UFs (ex: "BA,SP")
+                pa.id, pa.nome_alerta, pa.enviar_push, pa.created_at, pa.ativo,
                 (SELECT GROUP_CONCAT(uf SEPARATOR ',') FROM alertas_ufs WHERE alerta_id = pa.id) as uf,
-                
-                -- Reconstrói Municípios
                 (SELECT GROUP_CONCAT(municipio_nome SEPARATOR ',') FROM alertas_municipios WHERE alerta_id = pa.id) as municipio,
-                
-                -- Reconstrói Modalidades
                 (SELECT GROUP_CONCAT(modalidade_id SEPARATOR ',') FROM alertas_modalidades WHERE alerta_id = pa.id) as modalidades,
-                
-                -- Reconstrói Termos Inclusão
                 (SELECT GROUP_CONCAT(termo SEPARATOR ',') FROM alertas_termos WHERE alerta_id = pa.id AND tipo = 'INCLUSAO') as termos_inclusao,
-                
-                -- Reconstrói Termos Exclusão
                 (SELECT GROUP_CONCAT(termo SEPARATOR ',') FROM alertas_termos WHERE alerta_id = pa.id AND tipo = 'EXCLUSAO') as termos_exclusao
-
             FROM preferencias_alertas pa 
             WHERE pa.usuario_id = %s AND pa.ativo = TRUE
             ORDER BY pa.created_at DESC
@@ -1841,7 +1896,28 @@ def listar_alertas(uid, email, cursor):
         cursor.execute(query, (user_row['id'],))
         alertas = cursor.fetchall()
         
-        return jsonify([formatar_para_json(a) for a in alertas])
+        resultado_formatado = []
+        for a in alertas:
+            # Formata datas/decimais primeiro
+            a = formatar_para_json(a)
+            
+            # --- CONVERSÃO MANUAL DE STRING CSV PARA LISTA ---
+            # Se for None, vira []. Se for string, dá split.
+            a['uf'] = a['uf'].split(',') if a['uf'] else []
+            a['municipio'] = a['municipio'].split(',') if a['municipio'] else []
+            
+            # Modalidades são números, precisamos converter '1,5' -> [1, 5]
+            if a['modalidades']:
+                a['modalidades'] = [int(m) for m in a['modalidades'].split(',') if m.isdigit()]
+            else:
+                a['modalidades'] = []
+                
+            a['termos_inclusao'] = a['termos_inclusao'].split(',') if a['termos_inclusao'] else []
+            a['termos_exclusao'] = a['termos_exclusao'].split(',') if a['termos_exclusao'] else []
+            
+            resultado_formatado.append(a)
+        
+        return jsonify(resultado_formatado)
         
     except Exception as e:
         app.logger.error(f"Erro ao listar alertas: {e}")
@@ -1852,14 +1928,8 @@ def listar_alertas(uid, email, cursor):
 @login_firebase_required
 @with_db_cursor
 def salvar_alerta(uid, email, cursor):
-    """Cria novo alerta normalizado"""
-    app.logger.info(f"ALERTA (NOTIFICAÇÕES): Criar novo alerta para usuário {uid}")
     data = request.json
-    # 1. Validação de JSON
-    data = request.json
-    if not data:
-        app.logger.error("ALERTA: JSON não recebido ou inválido.")
-        return jsonify({'erro': "JSON inválido"}), 400
+    if not data: return jsonify({'erro': "JSON inválido"}), 400
     
     try:
         nome_alerta = data.get('nome_alerta', 'Alerta Personalizado')
@@ -1867,49 +1937,44 @@ def salvar_alerta(uid, email, cursor):
 
         cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
         user_row = cursor.fetchone()
-        # --- BLOCO DE CORREÇÃO ---
+        
+        # --- MUDANÇA: AUTO-REPAIR ---
+        # Se o usuário não existir (Webhook atrasou ou Sync falhou), cria um FREE para não crashar.
         if not user_row:
-            app.logger.warning(f"ALERTA: UID {uid} não encontrado. Criando automaticamente...")
-            # Cria o usuário FREE na hora
-            cursor.execute("""
-                INSERT INTO usuarios_status (uid_externo, email, created_at, is_pro)
-                VALUES (%s, %s, NOW(), 0)
-            """, (uid, email))
-            # Busca de novo para pegar o ID gerado
+            app.logger.warning(f"ALERTA: UID {uid} não encontrado. Criando placeholder FREE.")
+            cursor.execute("INSERT INTO usuarios_status (uid_externo, email, created_at, is_pro) VALUES (%s, %s, NOW(), 0)", (uid, email))
+            # Busca novamente para pegar o ID que acabou de ser criado
             cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
             user_row = cursor.fetchone()
-        # -------------------------
+        # -----------------------------
         
         user_id = user_row['id']
-        
-        # Validação PRO e Limites
-        if not user_row['is_pro']:
-            app.logger.info(f"ALERTA: Usuário {user_id} tentou criar alerta mas não é PRO.")
+        is_pro = user_row['is_pro']
+
+        # Regra PRO
+        if not is_pro:
+            app.logger.info(f"ALERTA: Bloqueado (Não-PRO) para UID {uid}")
             return jsonify({"erro": "Upgrade necessário."}), 403
 
+        # Validação Limite
         LIMIT_PRO = 5 
         cursor.execute("SELECT COUNT(*) as total FROM preferencias_alertas WHERE usuario_id = %s", (user_id,))
         if cursor.fetchone()['total'] >= LIMIT_PRO:
             return jsonify({"erro": f"Limite de {LIMIT_PRO} alertas atingido."}), 403
 
-        # Inserção Pai
-        cursor.execute("""
-            INSERT INTO preferencias_alertas (usuario_id, nome_alerta, enviar_push, ativo)
-            VALUES (%s, %s, %s, 1)
-        """, (user_id, nome_alerta, enviar_push))
-        
+        # Insere Pai
+        cursor.execute("INSERT INTO preferencias_alertas (usuario_id, nome_alerta, enviar_push, ativo) VALUES (%s, %s, %s, 1)", 
+                       (user_id, nome_alerta, enviar_push))
         alerta_id = cursor.lastrowid 
-        app.logger.info(f"ALERTA: Novo alerta {alerta_id} criado para usuário {user_id}.")
 
-        # Inserção Filhos (Normalizados)
+        # Insere Filhos (Chama a função global agora)
         _inserir_criterios_filhos(cursor, alerta_id, data)
-        
         cursor._connection.commit()
         
         return jsonify({"status": "sucesso", "id": alerta_id}), 201
         
     except Exception as e:
-        app.logger.error(f"Erro ao criar alerta: {e}")
+        app.logger.error(f"Erro criar alerta: {e}")
         return jsonify({'erro': "Erro interno."}), 500
     
 @app.route('/api/alertas/<int:alerta_id>', methods=['PUT'])
