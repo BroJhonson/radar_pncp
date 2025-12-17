@@ -160,6 +160,11 @@ def processar_notificacoes():
             JOIN usuarios_status u ON pa.usuario_id = u.id
             JOIN usuarios_dispositivos d ON pa.usuario_id = d.usuario_id
             
+            -- O LEFT JOIN deve ficar aqui em cima!
+            LEFT JOIN alertas_termos at_inc ON at_inc.alerta_id = pa.id 
+                AND at_inc.tipo = 'INCLUSAO' 
+                AND INSTR(%s, at_inc.termo) > 0 
+            
             WHERE 
                 pa.ativo = 1 
                 AND pa.enviar_push = 1
@@ -202,10 +207,7 @@ def processar_notificacoes():
                     AND INSTR(%s, at.termo) > 0
                 )
                 
-                LEFT JOIN alertas_termos at_inc ON at_inc.alerta_id = pa.id 
-                    AND at_inc.tipo = 'INCLUSAO' 
-                    AND INSTR(%s, at_inc.termo) > 0
-                LIMIT 1000
+            LIMIT 1000
         """
 
         enviados_count = 0
@@ -226,7 +228,7 @@ def processar_notificacoes():
             mod_id = lic['modalidadeId']
 
             # Executa Match
-            cursor.execute(query_match, (uf, municipio, mod_id, objeto, objeto, objeto))
+            cursor.execute(query_match, (objeto, uf, municipio, mod_id, objeto, objeto))
             destinatarios = cursor.fetchall()
 
             for dest in destinatarios:
