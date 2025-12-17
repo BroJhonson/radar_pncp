@@ -51,15 +51,36 @@ if not logger.handlers:
 logger.info("--- WORKER DE NOTIFICAÇÕES INICIADO ---")
 # ==============================================================================
 
-# Firebase Init
+# Firebase Init (Robusto)
 if not firebase_admin._apps:
     try:
-        cred_path = os.path.join(os.path.dirname(__file__), '../firebase_credentials.json')
+        # Tenta achar o arquivo em múltiplos lugares
+        base_dir = os.path.dirname(os.path.abspath(__file__)) # Pasta atual (backend)
+        root_dir = os.path.dirname(base_dir) # Pasta pai (radar-pncp)
+        
+        caminhos_possiveis = [
+            os.path.join(base_dir, 'firebase_credentials.json'),      # ./backend/firebase_credentials.json
+            os.path.join(root_dir, 'firebase_credentials.json'),      # ./firebase_credentials.json
+            '/var/www/radar-pncp/firebase_credentials.json'           # Caminho absoluto hardcoded (último recurso)
+        ]
+        
+        cred_path = None
+        for p in caminhos_possiveis:
+            if os.path.exists(p):
+                cred_path = p
+                break
+        
+        if not cred_path:
+            raise FileNotFoundError(f"Arquivo firebase_credentials.json não encontrado em: {caminhos_possiveis}")
+
+        logger.info(f"Carregando credenciais Firebase de: {cred_path}")
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
         logger.info("Firebase Admin inicializado.")
+        
     except Exception as e:
         logger.critical(f"ERRO CRÍTICO AO INICIAR FIREBASE: {e}")
+        # IMPORTANTE: Se não conectar no Firebase, o script DEVE parar, senão fica em loop de erro
         exit(1)
 
 def get_db_connection():
