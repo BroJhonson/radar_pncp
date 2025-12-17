@@ -1666,67 +1666,80 @@ def revenuecat_webhook():
         conn.close()
 
 # Função para verificação ativa do status PRO via API RevenueCat
+# --- HELPER: TIRA TEIMA REVENUECAT (VERSÃO DEBUG BLINDADA) ---
 def verificar_status_revenuecat_agora(uid):
     """
-    Consulta direta à API da RevenueCat.
-    Retorna True se for PRO, False se for Free.
-    Atualiza o banco local automaticamente se houver divergência.
+    Consulta direta à API da RevenueCat com logs de debug e timeout curto.
     """
     rc_key = os.getenv('REVENUECAT_API_KEY')
     if not rc_key:
         app.logger.error("REVENUECAT_API_KEY não configurada no .env")
         return False 
 
+    app.logger.info(f"RC DEBUG: Iniciando verificação para {uid}...")
+    
     try:
-        # Chama a API da RevenueCat
         url = f"https://api.revenuecat.com/v1/subscribers/{uid}"
         headers = {
             "Authorization": f"Bearer {rc_key}",
             "Content-Type": "application/json"
         }
         
-        # Timeout curto (3s) para não travar a requisição do usuário
-        response = requests.get(url, headers=headers, timeout=3)
+        # 1. TENTATIVA DE CONEXÃO (TIMEOUT RIGOROSO DE 4 SEGUNDOS)
+        start_time = time.time()
+        response = requests.get(url, headers=headers, timeout=4)
+        duration = time.time() - start_time
         
+        app.logger.info(f"RC DEBUG: Resposta HTTP {response.status_code} em {duration:.2f}s")
+
         if response.status_code == 200:
             data = response.json()
             entitlements = data.get('subscriber', {}).get('entitlements', {})
             
-            # Verifica se há algum entitlement ativo (sem data de expiração ou data futura)
             is_pro_rc = False
+            # Lógica de verificação
             for ent_name, ent_data in entitlements.items():
                 expires = ent_data.get('expires_date')
                 if expires:
-                    # Converte string ISO para datetime com timezone UTC
                     dt_expires = datetime.fromisoformat(expires.replace("Z", "+00:00"))
                     if dt_expires > datetime.now(timezone.utc):
                         is_pro_rc = True
                         break
                 else:
-                    # Sem data de expiração = Vitalício/Ativo
-                    is_pro_rc = True
+                    is_pro_rc = True # Vitalício
                     break
             
-            # SE O REVENUECAT DIZ QUE É PRO, ATUALIZAMOS O BANCO AGORA
+            app.logger.info(f"RC DEBUG: Status identificado na RC: {'PRO' if is_pro_rc else 'FREE'}")
+
+            # 2. SE FOR PRO, TENTA ATUALIZAR O BANCO (COM CUIDADO)
             if is_pro_rc:
-                conn = get_db_connection()
-                if conn:
-                    try:
+                app.logger.info("RC DEBUG: Tentando conectar ao banco para atualizar...")
+                conn = None
+                try:
+                    # Timeout de conexão com o banco para não travar a API
+                    conn = get_db_connection() # Certifique-se que essa função tem timeout
+                    if conn:
                         c = conn.cursor()
-                        # Atualiza para PRO e status 'active'
+                        # Tenta atualizar
                         c.execute("UPDATE usuarios_status SET is_pro = 1, status_assinatura = 'active', updated_at = NOW() WHERE uid_externo = %s", (uid,))
                         conn.commit()
-                        app.logger.info(f"AUTO-REPAIR: Usuário {uid} corrigido para PRO via verificação ativa.")
-                    except Exception as ex:
-                        app.logger.error(f"Erro ao atualizar banco no Auto-Repair: {ex}")
-                    finally:
-                        conn.close()
+                        app.logger.info(f"RC DEBUG: Sucesso! Banco atualizado para usuário {uid}.")
+                except Exception as ex:
+                    # Se der erro no banco, A GENTE NÃO TRAVA. Apenas loga e retorna True pro usuário passar.
+                    app.logger.error(f"RC DEBUG: Erro ao atualizar banco (mas usuário é PRO): {ex}")
+                finally:
+                    if conn: conn.close()
             
             return is_pro_rc
+        else:
+            app.logger.warning(f"RC DEBUG: Erro na API RevenueCat. Status: {response.status_code} - Body: {response.text}")
             
+    except requests.exceptions.Timeout:
+        app.logger.error("RC DEBUG: TIMEOUT conectando à RevenueCat (Rede Lenta/Bloqueada).")
+        return False
     except Exception as e:
-        app.logger.error(f"Erro ao verificar RevenueCat API: {e}")
-        return False # Na dúvida, segue o que estava no banco
+        app.logger.error(f"RC DEBUG: Erro geral: {e}")
+        return False
     
     return False
 # ============================================================================
