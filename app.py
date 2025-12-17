@@ -1757,21 +1757,17 @@ class AlertaSchema(BaseModel):
 def _inserir_criterios_filhos(cursor, alerta_id, data):
     """
     Função auxiliar que insere os registros nas tabelas filhas (UFs, Termos, etc).
-    Usada tanto no CREATE quanto no EDIT.
     """
     
     # Helper interno para inserção em lote
     def inserir_lote(tabela, coluna, lista_valores, extra_col=None, extra_val=None):
         if not lista_valores: return
         
-        # Garante que é uma lista. 
-        # Se vier string "BA,SP" (legado/erro frontend), converte para lista.
-        # Se vier lista ["BA", "SP"] (correto), mantém.
+        # Garante lista: "BA,SP" vira ["BA", "SP"]
         if isinstance(lista_valores, str):
             lista_valores = [x.strip() for x in lista_valores.split(',') if x.strip()]
             
         vals = []
-        # Monta a query dinamicamente
         query = f"INSERT INTO {tabela} (alerta_id, {coluna}"
         if extra_col: query += f", {extra_col}"
         query += ") VALUES (%s, %s"
@@ -1779,44 +1775,68 @@ def _inserir_criterios_filhos(cursor, alerta_id, data):
         query += ")"
 
         for item in lista_valores:
-            # Proteção básica contra strings vazias
-            if isinstance(item, str) and not item.strip():
-                continue
+            if isinstance(item, str) and not item.strip(): continue
 
             if extra_val:
-                vals.append((alerta_id, item, extra_val))
+                vals.append((alerta_id, str(item).strip(), extra_val))
             else:
-                vals.append((alerta_id, item))
+                vals.append((alerta_id, str(item).strip()))
         
         if vals:
             cursor.executemany(query, vals)
 
-    # Executa as inserções para cada tipo de filtro
+    # Executa as inserções
     inserir_lote('alertas_ufs', 'uf', data.get('uf'))
     inserir_lote('alertas_municipios', 'municipio_nome', data.get('municipio'))
     inserir_lote('alertas_modalidades', 'modalidade_id', data.get('modalidades'))
+    
+    # ATENÇÃO: Verifique se no JSON vem 'termos_inclusao' ou 'termo_inclusao'
     inserir_lote('alertas_termos', 'termo', data.get('termos_inclusao'), 'tipo', 'INCLUSAO')
     inserir_lote('alertas_termos', 'termo', data.get('termos_exclusao'), 'tipo', 'EXCLUSAO')
 
+# --- ROTA LISTAR (GET) - CORRIGIDA PARA O NOVO BANCO ---
 @app.route('/api/alertas', methods=['GET'])
 @login_firebase_required
 @with_db_cursor
 def listar_alertas(uid, email, cursor):
-    """Lista todos os alertas configurados pelo usuário"""
+    """
+    Lista alertas reconstruindo as strings (Group Concat) para o Frontend
+    """
     try:
-        # Busca ID do usuário
         cursor.execute("SELECT id FROM usuarios_status WHERE uid_externo = %s", (uid,))
         user_row = cursor.fetchone()
         
-        if not user_row:
-            return jsonify([]), 200 # Usuário novo sem alertas
+        if not user_row: return jsonify([]), 200
 
-        # Busca alertas ------------------------- ADICIONAR MODALIDADE AQUI E NO SQL !!!!!!!!!!! JA ADICIONEI NO APP
+        # --- A MÁGICA DO GROUP_CONCAT ---
+        # Como os dados estão em tabelas separadas, usamos subqueries para 
+        # juntá-los com vírgula e entregar pronto para o App Mobile.
         query = """
-            SELECT id, nome_alerta, uf, municipio, modalidades, termos_inclusao, termos_exclusao, enviar_push, created_at 
-            FROM preferencias_alertas 
-            WHERE usuario_id = %s AND ativo = TRUE
-            ORDER BY created_at DESC
+            SELECT 
+                pa.id, 
+                pa.nome_alerta, 
+                pa.enviar_push, 
+                pa.created_at,
+                pa.ativo,
+                
+                -- Reconstrói a lista de UFs (ex: "BA,SP")
+                (SELECT GROUP_CONCAT(uf SEPARATOR ',') FROM alertas_ufs WHERE alerta_id = pa.id) as uf,
+                
+                -- Reconstrói Municípios
+                (SELECT GROUP_CONCAT(municipio_nome SEPARATOR ',') FROM alertas_municipios WHERE alerta_id = pa.id) as municipio,
+                
+                -- Reconstrói Modalidades
+                (SELECT GROUP_CONCAT(modalidade_id SEPARATOR ',') FROM alertas_modalidades WHERE alerta_id = pa.id) as modalidades,
+                
+                -- Reconstrói Termos Inclusão
+                (SELECT GROUP_CONCAT(termo SEPARATOR ',') FROM alertas_termos WHERE alerta_id = pa.id AND tipo = 'INCLUSAO') as termos_inclusao,
+                
+                -- Reconstrói Termos Exclusão
+                (SELECT GROUP_CONCAT(termo SEPARATOR ',') FROM alertas_termos WHERE alerta_id = pa.id AND tipo = 'EXCLUSAO') as termos_exclusao
+
+            FROM preferencias_alertas pa 
+            WHERE pa.usuario_id = %s AND pa.ativo = TRUE
+            ORDER BY pa.created_at DESC
         """
         cursor.execute(query, (user_row['id'],))
         alertas = cursor.fetchall()
@@ -1827,76 +1847,69 @@ def listar_alertas(uid, email, cursor):
         app.logger.error(f"Erro ao listar alertas: {e}")
         return jsonify({'erro': 'Erro ao buscar alertas'}), 500
 
+# --- ROTA SALVAR (POST) ---
 @app.route('/api/alertas', methods=['POST'])
 @login_firebase_required
 @with_db_cursor
 def salvar_alerta(uid, email, cursor):
-    """Cria novo alerta normalizado com validação de Plano"""
+    """Cria novo alerta normalizado"""
+    app.logger.info(f"ALERTA (NOTIFICAÇÕES): Criar novo alerta para usuário {uid}")
     data = request.json
+    # 1. Validação de JSON
+    data = request.json
+    if not data:
+        app.logger.error("ALERTA: JSON não recebido ou inválido.")
+        return jsonify({'erro': "JSON inválido"}), 400
+    
     try:
-        # 1. Validação Básica de Entrada
-        nome_alerta = data.get('nome_alerta', 'Meu Alerta')
+        nome_alerta = data.get('nome_alerta', 'Alerta Personalizado')
         enviar_push = data.get('enviar_push', True)
 
-        # 2. Busca Usuário e Status PRO
         cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
         user_row = cursor.fetchone()
         if not user_row:
-             return jsonify({"erro": "Usuário não encontrado."}), 404
+            app.logger.warning(f"ALERTA: UID {uid} não encontrado no banco local.")
+            return jsonify({"erro": "Usuário não encontrado"}), 404
         
-        is_pro = bool(user_row['is_pro'])
         user_id = user_row['id']
-
-        # =========================================================
-        # 3. REGRAS DE NEGÓCIO (Limites e Plano)
-        # =========================================================
         
-        # Regra A: Usuário FREE não pode criar alerta
-        if not is_pro:
-            return jsonify({
-                "erro": "Funcionalidade exclusiva PRO.",
-                "upgrade_required": True 
-            }), 403
+        # Validação PRO e Limites
+        if not user_row['is_pro']:
+            app.logger.info(f"ALERTA: Usuário {user_id} tentou criar alerta mas não é PRO.")
+            return jsonify({"erro": "Upgrade necessário."}), 403
 
-        # Regra B: Limite de alertas por usuário (Ex: 5)
-        # É importante manter um limite para não sobrecarregar o worker
         LIMIT_PRO = 5 
         cursor.execute("SELECT COUNT(*) as total FROM preferencias_alertas WHERE usuario_id = %s", (user_id,))
-        total_alertas = cursor.fetchone()['total']
-        
-        if total_alertas >= LIMIT_PRO:
-            return jsonify({
-                "erro": f"Você atingiu o limite de {LIMIT_PRO} alertas ativos."
-            }), 403
-        # =========================================================
+        if cursor.fetchone()['total'] >= LIMIT_PRO:
+            return jsonify({"erro": f"Limite de {LIMIT_PRO} alertas atingido."}), 403
 
-        # 4. Inserção do Alerta PAI
+        # Inserção Pai
         cursor.execute("""
-            INSERT INTO preferencias_alertas 
-            (usuario_id, nome_alerta, enviar_push, ativo)
+            INSERT INTO preferencias_alertas (usuario_id, nome_alerta, enviar_push, ativo)
             VALUES (%s, %s, %s, 1)
         """, (user_id, nome_alerta, enviar_push))
         
-        alerta_id = cursor.lastrowid # Pega o ID gerado automaticamente
+        alerta_id = cursor.lastrowid 
+        app.logger.info(f"ALERTA: Novo alerta {alerta_id} criado para usuário {user_id}.")
 
-        # 5. Inserção dos FILHOS (Usando a função auxiliar)
-        # Aqui a mágica acontece: distribui os dados nas tabelas normalizadas
+        # Inserção Filhos (Normalizados)
         _inserir_criterios_filhos(cursor, alerta_id, data)
         
-        # 6. Commit final (Salva tudo ou nada)
         cursor._connection.commit()
         
         return jsonify({"status": "sucesso", "id": alerta_id}), 201
         
     except Exception as e:
         app.logger.error(f"Erro ao criar alerta: {e}")
-        return jsonify({'erro': "Erro interno ao salvar alerta."}), 500
+        return jsonify({'erro': "Erro interno."}), 500
     
 @app.route('/api/alertas/<int:alerta_id>', methods=['PUT'])
 @login_firebase_required
 @with_db_cursor
 def editar_alerta(uid, email, cursor, alerta_id):
+    app.logger.info(f"Editar alerta {alerta_id} para usuário {uid}")
     data = request.json
+    
     try:
         # 1. VERIFICAÇÃO DE SEGURANÇA (O alerta pertence a esse usuário?)
         cursor.execute("""
@@ -1907,6 +1920,7 @@ def editar_alerta(uid, email, cursor, alerta_id):
         """, (alerta_id, uid))
         
         if not cursor.fetchone():
+            app.logger.warning(f"ALERTA: Tentativa de editar alerta {alerta_id} que não pertence ao usuário {uid}. OU alerta não existe.")
             return jsonify({"erro": "Alerta não encontrado ou acesso negado."}), 404
 
         # 2. ATUALIZA A TABELA PAI (Nome, Status, Push)
@@ -1939,6 +1953,7 @@ def editar_alerta(uid, email, cursor, alerta_id):
 
         # 4. ESTRATÉGIA "REFAZ" (Insere os novos dados usando a função auxiliar)
         _inserir_criterios_filhos(cursor, alerta_id, data)
+        app.logger.info(f"ALERTA: Alerta {alerta_id} atualizado com sucesso para o usuário {uid}.")
 
         # 5. COMMIT FINAL
         cursor._connection.commit()
@@ -1966,12 +1981,13 @@ def deletar_alerta(uid, email, cursor, alerta_id):
         query = "DELETE FROM preferencias_alertas WHERE id = %s AND usuario_id = %s"
         cursor.execute(query, (alerta_id, user_row['id']))
         cursor._connection.commit()
+        app.logger.info(f"ALERTA: Deletando alerta {alerta_id} do usuário {uid}.")
         
         if cursor.rowcount > 0:
             return jsonify({"status": "sucesso", "mensagem": "Alerta removido."})
         else:
             return jsonify({"erro": "Alerta não encontrado ou não pertence a você."}), 404
-            
+    
     except Exception as e:
         app.logger.error(f"Erro ao deletar alerta: {e}")
         return jsonify({'erro': "Erro interno."}), 500
@@ -1991,6 +2007,7 @@ def sincronizar_favoritos(uid, email, cursor):
     user_row = cursor.fetchone()
     if not user_row: return jsonify({"erro": "Usuario nao encontrado"}), 404
     user_id = user_row['id']
+    app.logger.info(f"FAVORITOS: Sincronizando favoritos para usuario {user_id} (PRO={user_row['is_pro']})")
     
     # 2. Verifica Limite (Ex: 100)
     LIMITE_FAVORITOS = 100
@@ -2004,7 +2021,8 @@ def sincronizar_favoritos(uid, email, cursor):
         # Filtra para nao estourar o limite na inserção em lote
         espaco_restante = LIMITE_FAVORITOS - total_atual
         ids_para_inserir = ids_locais[:espaco_restante]
-        
+        app.logger.info(f"FAVORITOS: Inserindo {len(ids_para_inserir)} novos favoritos para usuario {user_id}")
+
         valores = [(user_id, pncp) for pncp in ids_para_inserir]
         if valores:
             cursor.executemany("INSERT IGNORE INTO usuarios_Licitacoes_favoritas (usuario_id, licitacao_pncp) VALUES (%s, %s)", valores)
@@ -2031,6 +2049,7 @@ def remover_favorito(uid, email, cursor, pncp_id):
     
     cursor.execute("DELETE FROM usuarios_Licitacoes_favoritas WHERE usuario_id = %s AND licitacao_pncp = %s", (user_row['id'], pncp_id))
     cursor._connection.commit()
+    app.logger.info(f"FAVORITOS: Removendo Licitação favorito {pncp_id} para usuario {user_row['id']}")
     
     return jsonify({"status": "sucesso"})
 
@@ -2052,12 +2071,13 @@ def sincronizar_filtros_favoritos(uid, email, cursor):
     # 2. Insere ou Atualiza os filtros que vieram do App
     # (Upsert baseado no ID gerado no mobile)
     for f in filtros_locais:
-        id_mobile = f.get('id')
+        id_mobile = f.get('id') # ID gerado ficou por definição id_mobile (UUID), mas é o id para qualquer sistema (web,etc)
         nome = f.get('nome')
         # O 'filtros' dentro do objeto é a configuração complexa (FiltrosAplicados)
         # Precisamos converter para string JSON para salvar no banco de texto
         import json
         config_json = json.dumps(f.get('filtros', {}))
+        app.logger.info(f"FILTROS: Sincronizando filtro favorito '{nome}' (ID Mobile: {id_mobile}) para usuario {user_id}")
         
         cursor.execute("""
             INSERT INTO usuarios_filtros_salvos (usuario_id, id_mobile, nome_filtro, configuracao_json, created_at)
@@ -2101,6 +2121,7 @@ def deletar_filtro_favorito(uid, email, cursor, id_mobile):
     # 2. Deleta usando o ID gerado pelo mobile e o ID do usuário (segurança)
     cursor.execute("DELETE FROM usuarios_filtros_salvos WHERE usuario_id = %s AND id_mobile = %s", (user_row['id'], id_mobile))
     cursor._connection.commit()
+    app.logger.info(f"FILTROS: Deletando filtro favorito (ID Mobile: {id_mobile}) para usuario {user_row['id']}")
     
     if cursor.rowcount > 0:
         return jsonify({"status": "sucesso", "mensagem": "Filtro removido."})
