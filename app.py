@@ -1667,16 +1667,18 @@ def revenuecat_webhook():
 
 # Função para verificação ativa do status PRO via API RevenueCat
 # --- HELPER: TIRA TEIMA REVENUECAT (VERSÃO DEBUG BLINDADA) ---
+# --- HELPER: TIRA TEIMA REVENUECAT (VERSÃO LEVE - SEM BANCO) ---
 def verificar_status_revenuecat_agora(uid):
     """
-    Consulta direta à API da RevenueCat com logs de debug e timeout curto.
+    Consulta direta à API da RevenueCat.
+    Retorna APENAS True/False. Não mexe no banco para evitar Deadlock.
     """
     rc_key = os.getenv('REVENUECAT_API_KEY')
     if not rc_key:
-        app.logger.error("REVENUECAT_API_KEY não configurada no .env")
+        app.logger.error("REVENUECAT_API_KEY não configurada.")
         return False 
 
-    app.logger.info(f"RC DEBUG: Iniciando verificação para {uid}...")
+    app.logger.info(f"RC CHECK: Verificando {uid}...")
     
     try:
         url = f"https://api.revenuecat.com/v1/subscribers/{uid}"
@@ -1685,60 +1687,25 @@ def verificar_status_revenuecat_agora(uid):
             "Content-Type": "application/json"
         }
         
-        # 1. TENTATIVA DE CONEXÃO (TIMEOUT RIGOROSO DE 4 SEGUNDOS)
-        start_time = time.time()
         response = requests.get(url, headers=headers, timeout=4)
-        duration = time.time() - start_time
         
-        app.logger.info(f"RC DEBUG: Resposta HTTP {response.status_code} em {duration:.2f}s")
-
         if response.status_code == 200:
             data = response.json()
             entitlements = data.get('subscriber', {}).get('entitlements', {})
             
-            is_pro_rc = False
-            # Lógica de verificação
             for ent_name, ent_data in entitlements.items():
                 expires = ent_data.get('expires_date')
                 if expires:
                     dt_expires = datetime.fromisoformat(expires.replace("Z", "+00:00"))
                     if dt_expires > datetime.now(timezone.utc):
-                        is_pro_rc = True
-                        break
+                        return True # É PRO
                 else:
-                    is_pro_rc = True # Vitalício
-                    break
+                    return True # Vitalício
             
-            app.logger.info(f"RC DEBUG: Status identificado na RC: {'PRO' if is_pro_rc else 'FREE'}")
-
-            # 2. SE FOR PRO, TENTA ATUALIZAR O BANCO (COM CUIDADO)
-            if is_pro_rc:
-                app.logger.info("RC DEBUG: Tentando conectar ao banco para atualizar...")
-                conn = None
-                try:
-                    # Timeout de conexão com o banco para não travar a API
-                    conn = get_db_connection() # Certifique-se que essa função tem timeout
-                    if conn:
-                        c = conn.cursor()
-                        # Tenta atualizar
-                        c.execute("UPDATE usuarios_status SET is_pro = 1, status_assinatura = 'active', updated_at = NOW() WHERE uid_externo = %s", (uid,))
-                        conn.commit()
-                        app.logger.info(f"RC DEBUG: Sucesso! Banco atualizado para usuário {uid}.")
-                except Exception as ex:
-                    # Se der erro no banco, A GENTE NÃO TRAVA. Apenas loga e retorna True pro usuário passar.
-                    app.logger.error(f"RC DEBUG: Erro ao atualizar banco (mas usuário é PRO): {ex}")
-                finally:
-                    if conn: conn.close()
+            return False # Não achou assinatura ativa
             
-            return is_pro_rc
-        else:
-            app.logger.warning(f"RC DEBUG: Erro na API RevenueCat. Status: {response.status_code} - Body: {response.text}")
-            
-    except requests.exceptions.Timeout:
-        app.logger.error("RC DEBUG: TIMEOUT conectando à RevenueCat (Rede Lenta/Bloqueada).")
-        return False
     except Exception as e:
-        app.logger.error(f"RC DEBUG: Erro geral: {e}")
+        app.logger.error(f"Erro RC: {e}")
         return False
     
     return False
@@ -1923,71 +1890,65 @@ def listar_alertas(uid, email, cursor):
 @with_db_cursor
 def salvar_alerta(uid, email, cursor):
     data = request.json
-    if not data: 
-        app.logger.warning(f"Requisição inválida para /api/alertas/criar por {uid}. Não veio JSON, ou veio vazio.")
-        return jsonify({'erro': "JSON inválido"}), 400
+    if not data: return jsonify({'erro': "JSON inválido"}), 400
     
     try:
         nome_alerta = data.get('nome_alerta', 'Alerta Personalizado')
         enviar_push = data.get('enviar_push', True)
         enviar_email = data.get('enviar_email', False) 
 
-        # 1. Busca Usuário no Banco
+        # 1. Busca ou Cria Usuário (UPSERT)
+        # INSERT IGNORE inicia a transação e bloqueia a linha se inserir
+        cursor.execute("INSERT IGNORE INTO usuarios_status (uid_externo, email, created_at, is_pro) VALUES (%s, %s, NOW(), 0)", (uid, email))
+        
         cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
         user_row = cursor.fetchone()
-        
-        # --- AUTO-REPAIR 1: Usuário não existe no banco ---
-        if not user_row:
-            app.logger.warning(f"ALERTA: UID {uid} não encontrado. Criando placeholder.")
-            # CORREÇÃO 1: INSERT IGNORE evita erro se o usuário for criado por outra thread no mesmo ms
-            cursor.execute("INSERT IGNORE INTO usuarios_status (uid_externo, email, created_at, is_pro) VALUES (%s, %s, NOW(), 0)", (uid, email))
-            # Busca novamente
-            cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
-            user_row = cursor.fetchone()
-        # --------------------------------------------------
-        
         user_id = user_row['id']
         is_pro = bool(user_row['is_pro'])
 
-        # --- AUTO-REPAIR 2: O TIRA TEIMA (Se consta como Free) ---
+        # 2. TIRA TEIMA (Se consta como Free)
         if not is_pro:
-            app.logger.info(f"Usuario {uid} consta como FREE. Iniciando verificação ativa na RevenueCat...")
-            
-            # Chama o Helper
+            # Chama o helper LEVE (sem banco)
             is_pro_real = verificar_status_revenuecat_agora(uid)
             
             if is_pro_real:
-                is_pro = True # Libera para esta execução
-                app.logger.info("RevenueCat confirmou PRO. Acesso liberado.")
+                app.logger.info(f"RC CHECK: Usuário {uid} é PRO! Atualizando banco local...")
+                
+                # ATUALIZAÇÃO SEGURA: Usamos o MESMO cursor. 
+                # Como estamos na mesma transação, não há deadlock.
+                cursor.execute("""
+                    UPDATE usuarios_status 
+                    SET is_pro = 1, status_assinatura = 'active', updated_at = NOW() 
+                    WHERE id = %s
+                """, (user_id,))
+                
+                is_pro = True # Libera o fluxo
             else:
-                app.logger.info("RevenueCat confirmou FREE. Acesso negado.")
                 return jsonify({"erro": "Funcionalidade exclusiva para assinantes PRO.", "upgrade_required": True}), 403
-        # ---------------------------------------------------------
 
-        # Validação de Limite (Se chegou aqui, ou era PRO ou o Tira Teima liberou)
-        LIMIT_PRO = 3
+        # 3. Validação Limite
+        LIMIT_PRO = 5 
         cursor.execute("SELECT COUNT(*) as total FROM preferencias_alertas WHERE usuario_id = %s", (user_id,))
         if cursor.fetchone()['total'] >= LIMIT_PRO:
             return jsonify({"erro": f"Limite de {LIMIT_PRO} alertas atingido."}), 403
 
-        # Insere Pai (CORREÇÃO 2: Adicionado enviar_email)
+        # 4. Insere Alerta
         cursor.execute("""
             INSERT INTO preferencias_alertas (usuario_id, nome_alerta, enviar_push, enviar_email, ativo) 
             VALUES (%s, %s, %s, %s, 1)
         """, (user_id, nome_alerta, enviar_push, enviar_email))
-        
         alerta_id = cursor.lastrowid 
 
         _inserir_criterios_filhos(cursor, alerta_id, data)
-        cursor._connection.commit()
         
+        # Commit Único no final
+        cursor._connection.commit()
         return jsonify({"status": "sucesso", "id": alerta_id}), 201
         
     except Exception as e:
         app.logger.error(f"Erro criar alerta: {e}")
-        # Importante: logar o traceback para debug
         app.logger.error(traceback.format_exc())
-        return jsonify({'erro': "Erro interno no servidor."}), 500
+        return jsonify({'erro': "Erro interno."}), 500
     
 @app.route('/api/alertas/<int:alerta_id>', methods=['PUT'])
 @login_firebase_required
