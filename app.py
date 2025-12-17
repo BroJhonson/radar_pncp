@@ -1867,9 +1867,18 @@ def salvar_alerta(uid, email, cursor):
 
         cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
         user_row = cursor.fetchone()
+        # --- BLOCO DE CORREÇÃO ---
         if not user_row:
-            app.logger.warning(f"ALERTA: UID {uid} não encontrado no banco local.")
-            return jsonify({"erro": "Usuário não encontrado"}), 404
+            app.logger.warning(f"ALERTA: UID {uid} não encontrado. Criando automaticamente...")
+            # Cria o usuário FREE na hora
+            cursor.execute("""
+                INSERT INTO usuarios_status (uid_externo, email, created_at, is_pro)
+                VALUES (%s, %s, NOW(), 0)
+            """, (uid, email))
+            # Busca de novo para pegar o ID gerado
+            cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
+            user_row = cursor.fetchone()
+        # -------------------------
         
         user_id = user_row['id']
         
