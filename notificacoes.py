@@ -312,7 +312,7 @@ def processar_notificacoes():
             
             # Validação status
             status_real = (lic['situacaoReal'] or "").lower()
-            if not any(t in status_real for t in ['recebendo proposta', 'publicada', 'aberta', 'edital publicado']):
+            if not any(t in status_real for t in ['A Receber/Recebendo Proposta']):
                 continue
 
             obj = (lic['objetoCompra'] or "").lower()
