@@ -648,6 +648,7 @@ def _build_licitacoes_query(filtros):
     if condicoes_db:
         query_where = " WHERE " + " AND ".join(condicoes_db)
 
+    """
     # lOG DE DEBUG DA QUERY CONSTRUÍDA (Saber qual foi a URL e os parâmetros)
     app.logger.info(f"Query Construída: WHERE = '{query_where}'")
     app.logger.info(f"Parâmetros da Query: {parametros_db}")
@@ -657,6 +658,7 @@ def _build_licitacoes_query(filtros):
     app.logger.info(f"Modalidades ID finais: {filtros['modalidadesId']}")
     app.logger.info(f"UFs finais: {filtros['ufs']}")
     app.logger.info(f"Municípios finais: {filtros['municipiosNome']}")
+    """
     
     return query_where, parametros_db
 
@@ -698,30 +700,16 @@ def get_licitacoes():
         'municipiosNome': parse_lista_param('municipioNome'),
         'palavrasChave': parse_lista_param('palavraChave'),
         'excluirPalavra': parse_lista_param('excluirPalavra'),
-        # FIM DA REVISÃO AQUI ------------
-
-        # 'ufs': request.args.getlist('uf'),
-
-        # Recebe a string e a quebra em uma lista, removendo espaços vazios
-        #'ufs': [uf.strip() for uf in request.args.get('uf', '').split(',') if uf.strip()],
-        #'modalidadesId': [int(mid.strip()) for mid in request.args.get('modalidadeId', '').split(',') if mid.strip()],
-        # 'modalidadesId': request.args.getlist('modalidadeId', type=int),
         'statusRadar': request.args.get('statusRadar'),
         'dataPubInicio': request.args.get('dataPubInicio'),
         'dataPubFim': request.args.get('dataPubFim'),
         'valorMin': request.args.get('valorMin', type=float),
         'valorMax': request.args.get('valorMax', type=float),
-        # 'municipiosNome': request.args.getlist('municipioNome'),
-        #'municipiosNome': [m.strip() for m in request.args.get('municipioNome', '').split(',') if m.strip()],
         'dataAtualizacaoInicio': request.args.get('dataAtualizacaoInicio'),
         'dataAtualizacaoFim': request.args.get('dataAtualizacaoFim'),
         'anoCompra': request.args.get('anoCompra', type=int),
         'cnpjOrgao': request.args.get('cnpjOrgao'),
         'statusId': request.args.get('statusId', type=int),
-        # 'palavrasChave': request.args.getlist('palavraChave'),
-        # 'excluirPalavras': request.args.getlist('excluirPalavra')
-        #'palavrasChave': [kw.strip() for kw in request.args.get('palavraChave', '').split(',') if kw.strip()],
-        #'excluirPalavras': [kw.strip() for kw in request.args.get('excluirPalavra', '').split(',') if kw.strip()],
     }
     # Limpa filtros vazios ou nulos
     filtros = {k: v for k, v in filtros.items() if v is not None and v != '' and v != []}
@@ -750,12 +738,9 @@ def get_licitacoes():
         cursor_dados = conn.cursor(dictionary=True)
         cursor_contagem = conn.cursor(dictionary=True)
 
-        # --- INÍCIO DA MELHORIA: AJUSTE DO NÍVEL DE ISOLAMENTO ---
         # Definimos o nível de isolamento como READ COMMITTED para esta sessão.
         # Isso reduz a chance de a leitura bloquear o script de escrita (sync_api.py).
         cursor_contagem.execute("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED")
-        app.logger.info("Nível de isolamento da transação para API de leitura definido como READ COMMITTED.")
-        # --- FIM DA MELHORIA ---
         
         # Executa a query de contagem total
         cursor_contagem.execute(query_contagem, parametros_db)
@@ -792,10 +777,7 @@ def get_licitacoes():
         "total_paginas": total_paginas,
         "origem_dados": "banco_local_com_filtro_sql",
         "licitacoes": licitacoes_lista
-    })
-    
-    #return jsonify({ "exemplo": "dados das licitacoes" }) # Placeholder
-
+    })    
 
 @app.route('/api/licitacao/<path:numero_controle_pncp>', methods=['GET'])
 @with_db_cursor
@@ -912,8 +894,6 @@ def exportar_csv():
     if orderDir_param not in ['ASC', 'DESC']:
         app.logger.warning(f"Export CSV: Tentativa de direção de ordenação inválida '{orderDir_param}'")
         return jsonify({"erro": "Parâmetro de direção de ordenação inválido."}), 400
-    # --- FIM DA CORREÇÃO DE SEGURANÇA ---
-
 
     # 2. Usa a função central para construir a cláusula WHERE e os parâmetros
     query_where_sql, parametros_db_sql = _build_licitacoes_query(filtros)
@@ -936,7 +916,6 @@ def exportar_csv():
             if 'cursor' in locals():
                 cursor.close()
             conn.close()
-
 
     # 4. Geração do CSV em memória
     output = io.StringIO()
@@ -1039,11 +1018,9 @@ def get_all_posts(cursor):
         total_paginas=total_pages
     )
 
-
 @app.route('/api/post/<string:post_slug>', methods=['GET'])
 @with_db_cursor
 def get_single_post(post_slug, cursor):
-    # --- PASSO 1: QUERY PRINCIPAL MODIFICADA --- (mantida igual)
     # Adicionamos o LEFT JOIN com a tabela 'categorias' para já pegar os dados da categoria.
     query_post = """
         SELECT 
@@ -1060,7 +1037,6 @@ def get_single_post(post_slug, cursor):
     if not post:
         return jsonify(erro="Post não encontrado"), 404
 
-    # --- PASSO 2: NOVA QUERY PARA BUSCAR AS TAGS --- (mantida igual)
     # Usamos o ID do post que acabamos de encontrar para buscar suas tags.
     post_id = post['id']
     query_tags = """
@@ -1110,23 +1086,18 @@ class MyAdminIndexView(AdminIndexView):
         
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
         # Estatísticas
         cursor.execute("SELECT COUNT(*) as total FROM posts")
-        total_posts = cursor.fetchone()['total']
-        
+        total_posts = cursor.fetchone()['total']        
         cursor.execute("SELECT COUNT(*) as total FROM categorias")
-        total_categorias = cursor.fetchone()['total']
-        
+        total_categorias = cursor.fetchone()['total']        
         cursor.execute("SELECT COUNT(*) as total FROM tags")
-        total_tags = cursor.fetchone()['total']
-        
+        total_tags = cursor.fetchone()['total']        
         cursor.execute("SELECT * FROM posts ORDER BY data_publicacao DESC LIMIT 5")
         posts_recentes = cursor.fetchall()
         
         cursor.close()
-        conn.close()
-        
+        conn.close()        
         stats = {
             'total_posts': total_posts,
             'total_categorias': total_categorias,
@@ -1436,7 +1407,6 @@ class TagView(BaseView):
         flash('Tag excluída com sucesso.', 'success')
         return redirect(url_for('.index'))
     
-# =========================================================================
 # =================== Rotas API para categorias e tags ==================
 @app.route('/api/categorias', methods=['GET'])
 @with_db_cursor
@@ -1455,11 +1425,13 @@ def get_all_tags(cursor):
 admin.add_view(PostsView(name='Posts', endpoint='posts'))
 admin.add_view(CategoriaView(name='Categorias', endpoint='categorias'))
 admin.add_view(TagView(name='Tags', endpoint='tags'))
-# ============= acaba aqui o Flask-Admin e rotas do admin ====================
-# ============================================================================
+# =============================================== acaba aqui o Flask-Admin e rotas do admin ======================================================
+# ================================================================================================================================================
+
+
 
 # =========================================================================
-# ========================= ROTAS DE PAGAMENTO (REVENUECAT) ================
+# ======================== ROTAS DE PAGAMENTO (REVENUECAT) ================
 # =========================================================================
 @app.route('/api/webhooks/revenuecat', methods=['POST'])
 @limiter.limit("100 per minute") # Isso na pratica faz com que ataques de força bruta sejam mitigados, pois so permite 300 reqs/min
@@ -1468,9 +1440,7 @@ def revenuecat_webhook():
     Webhook RevenueCat com segurança, idempotência e consistência de estado.
     """
 
-    # ------------------------------------------------------------------
     # 1. AUTENTICAÇÃO
-    # ------------------------------------------------------------------
     auth_header = request.headers.get('Authorization', '')
     expected_token = os.getenv('REVENUECAT_WEBHOOK_AUTH', '')
 
@@ -1486,9 +1456,7 @@ def revenuecat_webhook():
     if not event:
         return jsonify({"status": "Ignorado (payload inválido)"}), 200
 
-    # ------------------------------------------------------------------
     # 2. EXTRAÇÃO DE DADOS
-    # ------------------------------------------------------------------
     rc_event_id = event.get('id')
     rc_event_type = event.get('type')
     app_user_id = event.get('app_user_id')
@@ -1508,12 +1476,10 @@ def revenuecat_webhook():
     dt_compra = ms_to_utc(purchased_at_ms)
     dt_expiracao = ms_to_utc(expiration_at_ms)
 
-    # ------------------------------------------------------------------
     # 3. BANCO + IDEMPOTÊNCIA
-    # ------------------------------------------------------------------
     conn = get_db_connection()
     if not conn:
-        return jsonify({"erro": "DB indisponível"}), 500
+        return jsonify({"erro": "Danco de Dados indisponível"}), 500
 
     try:
         cursor = conn.cursor(dictionary=True)
@@ -1527,9 +1493,7 @@ def revenuecat_webhook():
             app.logger.info(f"RC: Evento {rc_event_id} já processado")
             return jsonify({"status": "Já processado"}), 200
 
-        # ------------------------------------------------------------------
         # 4. GARANTE USUÁRIO
-        # ------------------------------------------------------------------
         cursor.execute("""
             INSERT IGNORE INTO usuarios_status (uid_externo, created_at)
             VALUES (%s, NOW())
@@ -1541,25 +1505,12 @@ def revenuecat_webhook():
         user = cursor.fetchone()
         user_id = user['id']
 
-        # ------------------------------------------------------------------
         # 5. LÓGICA DE ESTADO
-        # ------------------------------------------------------------------
-        eventos_ativam = {
-            'INITIAL_PURCHASE',
-            'RENEWAL',
-            'UNCANCELLATION',
-            'NON_RENEWING_PURCHASE',
-            'PRODUCT_CHANGE'
-        }
+        eventos_ativam = {'INITIAL_PURCHASE', 'RENEWAL', 'UNCANCELLATION', 'NON_RENEWING_PURCHASE', 'PRODUCT_CHANGE'}
 
-        eventos_alerta = {
-            'CANCELLATION',
-            'BILLING_ISSUE'
-        }
+        eventos_alerta = {'CANCELLATION', 'BILLING_ISSUE'}
 
-        eventos_expiram = {
-            'EXPIRATION'
-        }
+        eventos_expiram = {'EXPIRATION'}
 
         novo_is_pro = None
         novo_status = None
@@ -1567,64 +1518,36 @@ def revenuecat_webhook():
         if rc_event_type in eventos_ativam:
             novo_is_pro = 1
             novo_status = 'active'
-
         elif rc_event_type == 'CANCELLATION':
             novo_is_pro = 1
             novo_status = 'canceled'
-
         elif rc_event_type == 'BILLING_ISSUE':
             novo_is_pro = 1
             novo_status = 'billing_issue'
-
         elif rc_event_type in eventos_expiram:
             novo_is_pro = 0
             novo_status = 'expired'
 
-        # ------------------------------------------------------------------
         # 6. UPDATE CONSOLIDADO DO USUÁRIO
-        # ------------------------------------------------------------------
         if novo_status:
             cursor.execute("""
                 UPDATE usuarios_status
                 SET
-                    is_pro = %s,
-                    status_assinatura = %s,
-                    data_expiracao_atual = %s,
-                    updated_at = NOW()
+                    is_pro = %s, status_assinatura = %s, data_expiracao_atual = %s, updated_at = NOW()
                 WHERE id = %s
             """, (
-                novo_is_pro,
-                novo_status,
-                dt_expiracao,
-                user_id
+                novo_is_pro, novo_status, dt_expiracao, user_id
             ))
 
-        # ------------------------------------------------------------------
         # 7. HISTÓRICO (FONTE DA VERDADE)
-        # ------------------------------------------------------------------
         cursor.execute("""
             INSERT INTO assinaturas_historico
             (
-                usuario_id,
-                uid_externo,
-                evento,
-                produto_id,
-                event_id,
-                entitlement_id,
-                data_compra,
-                data_expiracao,
-                json_original
+                usuario_id, uid_externo, evento, produto_id, event_id, entitlement_id, data_compra, data_expiracao, json_original
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
-            user_id,
-            app_user_id,
-            rc_event_type,
-            product_id,
-            rc_event_id,
-            entitlement_id,
-            dt_compra,
-            dt_expiracao,
+            user_id, app_user_id, rc_event_type, product_id, rc_event_id, entitlement_id, dt_compra, dt_expiracao,
             json.dumps(data)
         ))
 
@@ -1650,7 +1573,7 @@ def revenuecat_webhook():
                 auth=("api", os.getenv('MAILGUN_API_KEY')),
                 data={
                     "from": f"Sistema Finnd <erro@{os.getenv('MAILGUN_DOMAIN')}>",
-                    "to": ["laysoftone@gmail.com"], # <--- Coloque seu email aqui
+                    "to": ["laysoftone@gmail.com"], # <--- COLOCAR NO ENV DEPOIS.
                     "subject": f"⚠️ ERRO CRÍTICO: Webhook RevenueCat Falhou!",
                     "text": f"O usuário {app_user_id} fez uma ação {rc_event_type} e o banco falhou.\n\nErro: {error_msg}\n\nTraceback:\n{stack_trace}"
                 },
@@ -1666,7 +1589,6 @@ def revenuecat_webhook():
         conn.close()
 
 # Função para verificação ativa do status PRO via API RevenueCat
-# --- HELPER: TIRA TEIMA REVENUECAT (VERSÃO DEBUG BLINDADA) ---
 # --- HELPER: TIRA TEIMA REVENUECAT (VERSÃO LEVE - SEM BANCO) ---
 def verificar_status_revenuecat_agora(uid):
     """
@@ -1698,14 +1620,14 @@ def verificar_status_revenuecat_agora(uid):
                 if expires:
                     dt_expires = datetime.fromisoformat(expires.replace("Z", "+00:00"))
                     if dt_expires > datetime.now(timezone.utc):
-                        return True # É PRO
+                        return True # Assinatura ativa
                 else:
-                    return True # Vitalício
+                    return True # Assinatura vitalícia ou sem expiração
             
             return False # Não achou assinatura ativa
             
     except Exception as e:
-        app.logger.error(f"Erro RC: {e}")
+        app.logger.error(f"Erro geral mo RevenueCat: {e}")
         return False
     
     return False
@@ -1890,7 +1812,9 @@ def listar_alertas(uid, email, cursor):
 @with_db_cursor
 def salvar_alerta(uid, email, cursor):
     data = request.json
-    if not data: return jsonify({'erro': "JSON inválido"}), 400
+    if not data: 
+        app.logger.warning("Salvar alerta: JSON inválido recebido.")
+        return jsonify({'erro': "JSON inválido"}), 400
     
     try:
         nome_alerta = data.get('nome_alerta', 'Alerta Personalizado')
@@ -1906,13 +1830,13 @@ def salvar_alerta(uid, email, cursor):
         user_id = user_row['id']
         is_pro = bool(user_row['is_pro'])
 
-        # 2. TIRA TEIMA (Se consta como Free)
+        # Segunda chance (Se consta como Free)
         if not is_pro:
-            # Chama o helper LEVE (sem banco)
+            # Chama o helper LEVE (sem afetar o banco)
             is_pro_real = verificar_status_revenuecat_agora(uid)
             
             if is_pro_real:
-                app.logger.info(f"RC CHECK: Usuário {uid} é PRO! Atualizando banco local...")
+                app.logger.info(f"RevenueCAT 2º teste: Usuário {uid} é PRO! Atualizando banco local...")
                 
                 # ATUALIZAÇÃO SEGURA: Usamos o MESMO cursor. 
                 # Como estamos na mesma transação, não há deadlock.
@@ -1927,7 +1851,7 @@ def salvar_alerta(uid, email, cursor):
                 return jsonify({"erro": "Funcionalidade exclusiva para assinantes PRO.", "upgrade_required": True}), 403
 
         # 3. Validação Limite
-        LIMIT_PRO = 5 
+        LIMIT_PRO = 5
         cursor.execute("SELECT COUNT(*) as total FROM preferencias_alertas WHERE usuario_id = %s", (user_id,))
         if cursor.fetchone()['total'] >= LIMIT_PRO:
             return jsonify({"erro": f"Limite de {LIMIT_PRO} alertas atingido."}), 403
