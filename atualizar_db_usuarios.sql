@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS `usuarios_status` (
     `nome` VARCHAR(255),
     `is_pro` BOOLEAN DEFAULT FALSE,
     `status_assinatura` ENUM('free', 'trial', 'active', 'canceled', 'expired', 'billing_issue', 'grace_period') DEFAULT 'free',
+    `data_expiracao_atual` DATETIME DEFAULT NULL,
     `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX `idx_uid` (`uid_externo`),

@@ -1679,59 +1679,61 @@ class RegistroDispositivoSchema(BaseModel):
     nome: Optional[str] = None
     token_push: str
     tipo_dispositivo: str  # 'mobile_android', 'mobile_ios', 'web_browser'
-    device_info: Optional[str] = None
+    # Aceita dict ou str ou None. O App geralmente manda um Objeto (dict)
+    device_info: Optional[dict | str] = None
 
 @app.route('/api/usuarios/sincronizar', methods=['POST'])
 @limiter.limit("20 per minute") # ISSO EVITA ABUSOS. Basicamente isso significa que um usuário pode chamar essa API no máximo 20 vezes por minuto.
 @login_firebase_required  # <--- Segurança ativada. # Usuário deve estar logado no Firebase.
 @with_db_cursor # Isso injeta o cursor do DB na função.
 def api_sincronizar_usuario(uid, email, cursor):
-    """
-    Registra/Atualiza o usuário e seu dispositivo.
-    Retorna o status PRO atualizado.
-    """
     data = request.json
+    app.logger.info(f"SYNC USUARIO: Recebido payload de {email}") # LOG PARA DEBUG
+
     try:
-        # Valida os dados recebidos com Pydantic
         dados = RegistroDispositivoSchema(**data)
         
-        # 1. Garante Usuário na tabela (UPSERT)
-        # Se não existe, CRIA. Se já existe, ATUALIZA nome e email.
-        # Usamos ON DUPLICATE KEY UPDATE para garantir que dados novos (ex: mudou de nome) sejam salvos.
+        # Garante Usuário
         cursor.execute("""
             INSERT INTO usuarios_status (uid_externo, email, nome, created_at) 
             VALUES (%s, %s, %s, NOW())
             ON DUPLICATE KEY UPDATE email=VALUES(email), nome=VALUES(nome), updated_at=NOW()
         """, (uid, email, dados.nome))
         
-        # Pega o ID interno e o status PRO para devolver ao app
         cursor.execute("SELECT id, is_pro FROM usuarios_status WHERE uid_externo = %s", (uid,))
         user_row = cursor.fetchone()
         user_id = user_row['id']
         is_pro = bool(user_row['is_pro'])
         
-        # 2. Registra/Atualiza o Dispositivo e Token Push
-        # Importante: Um usuário pode ter vários dispositivos (iPad e iPhone). 
-        # O UNIQUE KEY (usuario_id, token_push) no banco evita duplicar o mesmo aparelho.
+        # TRATAMENTO DO DEVICE INFO (JSON)
+        device_info_str = None
+        if dados.device_info:
+            if isinstance(dados.device_info, dict):
+                device_info_str = json.dumps(dados.device_info)
+            else:
+                device_info_str = str(dados.device_info)
+
+        # Atualiza Dispositivo
         cursor.execute("""
             INSERT INTO usuarios_dispositivos (usuario_id, tipo, token_push, device_info, updated_at)
             VALUES (%s, %s, %s, %s, NOW())
-            ON DUPLICATE KEY UPDATE updated_at=NOW(), device_info=VALUES(device_info)
-        """, (user_id, dados.tipo_dispositivo, dados.token_push, dados.device_info))
+            ON DUPLICATE KEY UPDATE updated_at=NOW(), device_info=VALUES(device_info), token_push=VALUES(token_push)
+        """, (user_id, dados.tipo_dispositivo, dados.token_push, device_info_str))
         
-        # IMPORTANTE: Commit manual pois estamos fazendo escritas
         cursor._connection.commit()
+        app.logger.info(f"SYNC SUCESSO: Usuario {user_id} sincronizado.")
         
         return jsonify({
             "status": "sucesso", 
             "mensagem": "Sincronizado com sucesso.",
-            "is_pro": is_pro  # O App usa isso para liberar features PRO imediatamente
+            "is_pro": is_pro
         })
 
     except ValidationError as e:
+        app.logger.error(f"SYNC ERRO VALIDACAO: {e.errors()}") # Loga o erro exato
         return jsonify({'erro': "Dados inválidos", 'detalhes': e.errors()}), 400
     except Exception as e:
-        app.logger.error(f"Erro sincronizar usuário: {e}")
+        app.logger.error(f"SYNC ERRO INTERNO: {e}")
         return jsonify({'erro': "Erro interno no servidor"}), 500
 
 # ============================================================================
@@ -1982,7 +1984,7 @@ def sincronizar_favoritos(uid, email, cursor):
     
     # 2. Verifica Limite (Ex: 100)
     LIMITE_FAVORITOS = 100
-    cursor.execute("SELECT COUNT(*) as total FROM usuarios_Licitacoes_favoritas WHERE usuario_id = %s", (user_id,))
+    cursor.execute("SELECT COUNT(*) as total FROM usuarios_licitacoes_favoritas WHERE usuario_id = %s", (user_id,))
     total_atual = cursor.fetchone()['total']
     
     # Se ja passou do limite, nao insere novos, mas devolve a lista existente
@@ -1996,11 +1998,11 @@ def sincronizar_favoritos(uid, email, cursor):
 
         valores = [(user_id, pncp) for pncp in ids_para_inserir]
         if valores:
-            cursor.executemany("INSERT IGNORE INTO usuarios_Licitacoes_favoritas (usuario_id, licitacao_pncp) VALUES (%s, %s)", valores)
+            cursor.executemany("INSERT IGNORE INTO usuarios_licitacoes_favoritas (usuario_id, licitacao_pncp) VALUES (%s, %s)", valores)
             cursor._connection.commit()
 
     # 3. Retorna TUDO que está no banco para o app atualizar
-    cursor.execute("SELECT licitacao_pncp FROM usuarios_Licitacoes_favoritas WHERE usuario_id = %s", (user_id,))
+    cursor.execute("SELECT licitacao_pncp FROM usuarios_licitacoes_favoritas WHERE usuario_id = %s", (user_id,))
     todos = [row['licitacao_pncp'] for row in cursor.fetchall()]
     
     return jsonify({
@@ -2018,7 +2020,7 @@ def remover_favorito(uid, email, cursor, pncp_id):
     user_row = cursor.fetchone()
     if not user_row: return jsonify({"erro": "Usuario"}), 404
     
-    cursor.execute("DELETE FROM usuarios_Licitacoes_favoritas WHERE usuario_id = %s AND licitacao_pncp = %s", (user_row['id'], pncp_id))
+    cursor.execute("DELETE FROM usuarios_licitacoes_favoritas WHERE usuario_id = %s AND licitacao_pncp = %s", (user_row['id'], pncp_id))
     cursor._connection.commit()
     app.logger.info(f"FAVORITOS: Removendo Licitação favorito {pncp_id} para usuario {user_row['id']}")
     
@@ -2032,6 +2034,7 @@ def remover_favorito(uid, email, cursor, pncp_id):
 def sincronizar_filtros_favoritos(uid, email, cursor):
     data = request.json or {}
     filtros_locais = data.get('filtros_locais', [])
+    app.logger.info(f"SYNC FILTROS: Recebidos {len(filtros_locais)} filtros de {email}") # LOG PARA DEBUG
     
     # 1. Busca Usuario
     cursor.execute("SELECT id FROM usuarios_status WHERE uid_externo = %s", (uid,))
@@ -2046,7 +2049,6 @@ def sincronizar_filtros_favoritos(uid, email, cursor):
         nome = f.get('nome')
         # O 'filtros' dentro do objeto é a configuração complexa (FiltrosAplicados)
         # Precisamos converter para string JSON para salvar no banco de texto
-        import json
         config_json = json.dumps(f.get('filtros', {}))
         app.logger.info(f"FILTROS: Sincronizando filtro favorito '{nome}' (ID Mobile: {id_mobile}) para usuario {user_id}")
         
@@ -2060,13 +2062,13 @@ def sincronizar_filtros_favoritos(uid, email, cursor):
         """, (user_id, id_mobile, nome, config_json))
     
     cursor._connection.commit()
+    app.logger.info("SYNC FILTROS: Commit realizado com sucesso (filtros salvos).")
 
     # 3. Retorna TODOS os filtros do banco para o App ficar igual
     cursor.execute("SELECT id_mobile, nome_filtro, configuracao_json FROM usuarios_filtros_salvos WHERE usuario_id = %s", (user_id,))
     rows = cursor.fetchall()
     
     filtros_remotos = []
-    import json
     for row in rows:
         filtros_remotos.append({
             "id": row['id_mobile'],
