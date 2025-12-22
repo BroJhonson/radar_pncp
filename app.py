@@ -37,6 +37,7 @@ import hmac # Para comparação segura de senha
 import json
 import traceback
 import hashlib
+from mysql.connector import pooling
 
 # =========================================================================
 # ========================= FIREBASE ======================================
@@ -219,42 +220,42 @@ login_manager.login_message_category = "info"
 
 
 # --- Função Auxiliares e de Conecção para o Banco de Dados ---
-def get_db_connection(max_retries=3, delay=2):
+dbconfig = {
+    "host": os.getenv('MARIADB_HOST'),
+    "user": os.getenv('MARIADB_USER'),
+    "password": os.getenv('MARIADB_PASSWORD'),
+    "database": os.getenv('MARIADB_DATABASE'),
+    "pool_name": "finnd_pool",
+    "pool_size": 10, # Mantém 10 conexões vivas e reaproveita ---- QUANDO SUBIR O NUMERO DE USUARIOS PRECISA AUMENTAR ISSO AQUI ----
+    "autocommit": False
+}
+connection_pool = pooling.MySQLConnectionPool(**dbconfig)
+
+def get_db_connection():
     """
-    Retorna uma conexão com o banco de dados MariaDB com retry automático
-    para erros de conexão.
+    Retorna uma conexão válida do pool MariaDB.
+
+    - Reutiliza conexões (connection pooling)
+    - Revalida conexão morta
+    - Evita churn de TCP
+    - Seguro para Gunicorn + produção
     """
-    attempt = 0
-    while attempt < max_retries:
-        try:
-            conn = mysql.connector.connect(
-                host=os.getenv('MARIADB_HOST'),
-                user=os.getenv('MARIADB_USER'),
-                password=os.getenv('MARIADB_PASSWORD'),
-                database=os.getenv('MARIADB_DATABASE')
-            )
-            return conn
-        except (errors.InterfaceError, errors.OperationalError) as err:
-            # Problema de rede ou servidor indisponível → vale a pena tentar de novo
-            app.logger.warning(
-                f"Tentativa {attempt+1}/{max_retries} falhou (erro de conexão): {err}"
-            )
-            attempt += 1
-            time.sleep(delay)
-        except errors.ProgrammingError as err:
-            # Erro de credenciais, banco inexistente, etc → retry não resolve
-            app.logger.error(f"Erro de programação (credenciais/SQL inválido): {err}")
-            break
-        except errors.IntegrityError as err:
-            # Violação de constraint (chave duplicada, FK inválida) → retry não resolve
-            app.logger.error(f"Erro de integridade: {err}")
-            break
-        except mysql.connector.Error as err:
-            # Qualquer outro erro inesperado
-            app.logger.error(f"Erro inesperado no MariaDB: {err}")
-            break
-    app.logger.error("Falha ao conectar ao banco de dados após múltiplas tentativas.")
-    return None
+    try:
+        conn = connection_pool.get_connection()
+
+        # Garante que a conexão ainda está viva
+        if not conn.is_connected():
+            conn.reconnect(attempts=2, delay=1)
+
+        return conn
+
+    except mysql.connector.Error as err:
+        app.logger.error(f"Erro ao obter conexão do pool MariaDB: {err}")
+        return None
+
+    except Exception as err:
+        app.logger.exception("Erro inesperado ao obter conexão do pool")
+        return None
 
 def with_db_cursor(func):
     """

@@ -1,4 +1,7 @@
 # backend/notificacoes.py
+# Precisa definir o Tipo de notificação para diferencias notificações se sistema, atualização, oportunidades, ect.
+# Aqui por padrão é do tipo Oportunidade (licitação nova)!
+
 import os
 import firebase_admin
 from firebase_admin import credentials, messaging
@@ -8,6 +11,7 @@ import requests
 import logging
 from logging.handlers import RotatingFileHandler
 import time
+import html
 
 load_dotenv()
 
@@ -93,39 +97,30 @@ def get_db_connection():
 # Helper para o corpo de email
 # Precisa ainda configurar a ação do click no link. ATENÇÃO!!!
 def gerar_html_email(nome_usuario, titulo_licitacao, orgao, valor, municipio, uf, link_pncp, nome_alerta):
-    # Cores da sua marca (Ajuste conforme necessário)
-    COR_PRIMARIA = "#0056b3" # Azul Finnd
+    # SEGURANÇA: Limpa caracteres perigosos para evitar quebrar o HTML
+    titulo_limpo = html.escape(titulo_licitacao)
+    orgao_limpo = html.escape(orgao)
+    municipio_limpo = html.escape(municipio)
+    
+    # Cores da sua marca
+    COR_PRIMARIA = "#0056b3"
     COR_FUNDO = "#f4f4f7"
     
-    html = f"""
+    html_content = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
         <style>
-            body {{ background-color: {COR_FUNDO}; font-family: sans-serif; -webkit-font-smoothing: antialiased; font-size: 14px; line-height: 1.4; margin: 0; padding: 0; -ms-text-size-adjust: 100%; -webkit-text-size-adjust: 100%; }}
-            table {{ border-collapse: separate; mso-table-lspace: 0pt; mso-table-rspace: 0pt; width: 100%; }}
-            table td {{ font-family: sans-serif; font-size: 14px; vertical-align: top; }}
+            body {{ background-color: {COR_FUNDO}; font-family: sans-serif; font-size: 14px; line-height: 1.4; margin: 0; padding: 0; }}
             .container {{ display: block; margin: 0 auto !important; max-width: 580px; padding: 10px; width: 580px; }}
             .content {{ box-sizing: border-box; display: block; margin: 0 auto; max-width: 580px; padding: 10px; }}
             .main {{ background: #ffffff; border-radius: 3px; width: 100%; }}
             .wrapper {{ box-sizing: border-box; padding: 20px; }}
-            .content-block {{ padding-bottom: 10px; padding-top: 10px; }}
-            .footer {{ clear: both; margin-top: 10px; text-align: center; width: 100%; }}
-            .footer td, .footer p, .footer span, .footer a {{ color: #999999; font-size: 12px; text-align: center; }}
-            h1, h2, h3 {{ color: #000000; font-family: sans-serif; font-weight: 400; line-height: 1.4; margin: 0; margin-bottom: 30px; }}
-            h1 {{ font-size: 35px; font-weight: 300; text-align: center; text-transform: capitalize; }}
-            p, ul, ol {{ font-family: sans-serif; font-size: 14px; font-weight: normal; margin: 0; margin-bottom: 15px; }}
-            .btn {{ box-sizing: border-box; width: 100%; }}
-            .btn > tbody > tr > td {{ padding-bottom: 15px; }}
-            .btn table {{ width: auto; }}
-            .btn table td {{ background-color: #ffffff; border-radius: 5px; text-align: center; }}
-            .btn a {{ background-color: #ffffff; border: solid 1px {COR_PRIMARIA}; border-radius: 5px; box-sizing: border-box; color: {COR_PRIMARIA}; cursor: pointer; display: inline-block; font-size: 14px; font-weight: bold; margin: 0; padding: 12px 25px; text-decoration: none; text-transform: capitalize; }}
-            .btn-primary table td {{ background-color: {COR_PRIMARIA}; }}
-            .btn-primary a {{ background-color: {COR_PRIMARIA}; border-color: {COR_PRIMARIA}; color: #ffffff; }}
+            .btn a {{ background-color: #ffffff; border: solid 1px {COR_PRIMARIA}; border-radius: 5px; color: {COR_PRIMARIA}; display: inline-block; font-weight: bold; padding: 12px 25px; text-decoration: none; }}
+            .btn-primary a {{ background-color: {COR_PRIMARIA}; color: #ffffff; }}
             .infos {{ background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-bottom: 20px; border-left: 4px solid {COR_PRIMARIA}; }}
-            .badge {{ background: #e1ecf4; color: {COR_PRIMARIA}; padding: 2px 6px; border-radius: 4px; font-size: 12px; font-weight: bold; }}
         </style>
     </head>
     <body>
@@ -137,54 +132,34 @@ def gerar_html_email(nome_usuario, titulo_licitacao, orgao, valor, municipio, uf
                 <table role="presentation" class="main">
                 <tr>
                     <td class="wrapper">
-                    <table role="presentation" border="0" cellpadding="0" cellspacing="0">
-                        <tr>
-                        <td>
-                            <p>Olá, <strong>{nome_usuario}</strong>!</p>
-                            <p>O seu alerta <strong>"{nome_alerta}"</strong> encontrou uma nova oportunidade que pode te interessar.</p>
-                            
-                            <div class="infos">
-                                <p style="margin-bottom: 5px; font-size: 16px;"><strong>{titulo_licitacao}</strong></p>
-                                <p style="margin-bottom: 5px;">🏛️ {orgao}</p>
-                                <p style="margin-bottom: 5px;">📍 {municipio} - {uf}</p>
-                                <p style="margin-bottom: 0px;">💰 <strong>Valor Estimado: {valor}</strong></p>
-                            </div>
+                        <p>Olá, <strong>{html.escape(nome_usuario)}</strong>!</p>
+                        <p>O seu alerta <strong>"{html.escape(nome_alerta)}"</strong> encontrou uma nova oportunidade:</p>
+                        
+                        <div class="infos">
+                            <p style="font-size: 16px;"><strong>{titulo_limpo}</strong></p>
+                            <p>🏛️ {orgao_limpo}</p>
+                            <p>📍 {municipio_limpo} - {uf}</p>
+                            <p>💰 <strong>Valor Estimado: {valor}</strong></p>
+                        </div>
 
-                            <p>Toque no botão abaixo para ver o edital completo e os anexos diretamente no aplicativo.</p>
-                            
-                            <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="btn btn-primary">
-                            <tbody>
-                                <tr>
+                        <p>Toque no botão abaixo para ver no aplicativo:</p>
+                        
+                        <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="btn btn-primary">
+                        <tbody>
+                            <tr>
                                 <td align="center">
-                                    <table role="presentation" border="0" cellpadding="0" cellspacing="0">
-                                    <tbody>
-                                        <tr>
-                                        <td> <a href="{link_pncp}" target="_blank">Ver Oportunidade no App</a> </td>
-                                        </tr>
-                                    </tbody>
-                                    </table>
+                                    <a href="{link_pncp}" target="_blank">Ver Oportunidade</a>
                                 </td>
-                                </tr>
-                            </tbody>
-                            </table>
-                            
-                            <p style="font-size: 12px; color: #777;">Se o botão não funcionar, copie o link: {link_pncp}</p>
-                        </td>
-                        </tr>
-                    </table>
+                            </tr>
+                        </tbody>
+                        </table>
+                        
+                        <p style="font-size: 12px; color: #777; margin-top: 20px;">
+                           Link direto: {link_pncp}
+                        </p>
                     </td>
                 </tr>
                 </table>
-                <div class="footer">
-                <table role="presentation" border="0" cellpadding="0" cellspacing="0">
-                    <tr>
-                    <td class="content-block">
-                        <span class="apple-link">Enviado por Finnd - Licitações</span>
-                        <br> Você recebeu este e-mail por causa do alerta "{nome_alerta}".
-                    </td>
-                    </tr>
-                </table>
-                </div>
             </div>
             </td>
             <td>&nbsp;</td>
@@ -193,7 +168,7 @@ def gerar_html_email(nome_usuario, titulo_licitacao, orgao, valor, municipio, uf
     </body>
     </html>
     """
-    return html
+    return html_content
 
 def enviar_email_mailgun(destinatario_email, destinatario_nome, assunto, html_body):
     """Envia o e-mail usando a API do Mailgun"""
@@ -254,28 +229,27 @@ def resgatar_zumbis(cursor, conn):
 def processar_notificacoes():
     licitacoes_para_processar = []
     
-    # --- FASE 1: LEITURA E LOCK RÁPIDO ---
-    # Abre conexão, pega dados, fecha conexão. Rápido.
+    # --- FASE 1: COLETA DE DADOS (Rápido) ---
     conn = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # 1. Resgate Zumbis (Rápido)
+        # 1. Resgate Zumbis
         cursor.execute("""
             UPDATE licitacoes SET notificacao_processada = 0, processamento_inicio = NULL 
             WHERE notificacao_processada = 2 AND processamento_inicio < DATE_SUB(NOW(), INTERVAL 15 MINUTE)
         """)
         conn.commit()
 
-        # 2. Marca Lote (Rápido)
+        # 2. Marca Lote para processamento (Status 2)
         cursor.execute("""
             UPDATE licitacoes SET notificacao_processada = 2, processamento_inicio = NOW() 
             WHERE notificacao_processada = 0 LIMIT 50
         """)
         conn.commit()
 
-        # 3. Seleciona Dados (Rápido)
+        # 3. Seleciona Dados
         cursor.execute("""
             SELECT id, numeroControlePNCP, objetoCompra, valorTotalEstimado, situacaoReal,
                    unidadeOrgaoUfSigla, unidadeOrgaoMunicipioNome, modalidadeId, orgaoEntidadeRazaoSocial
@@ -291,16 +265,15 @@ def processar_notificacoes():
         logger.info(f"Processando lote de {len(licitacoes)} licitações...")
 
         # 4. Busca Reversa (Matches)
-        # Trazemos tudo para a memória agora para fechar o banco logo
         for lic in licitacoes:
-            # (Sua query complexa aqui)
             query_match = """
                 SELECT DISTINCT d.token_push, d.tipo as device_type, pa.enviar_email, 
-                       u.email as email_user, u.nome as nome_user, pa.nome_alerta, at_inc.termo as termo_match
+                       u.email as email_user, u.nome as nome_user, 
+                       pa.nome_alerta, 
+                       pa.id as alerta_id
                 FROM preferencias_alertas pa
                 JOIN usuarios_status u ON pa.usuario_id = u.id
                 JOIN usuarios_dispositivos d ON pa.usuario_id = d.usuario_id
-                LEFT JOIN alertas_termos at_inc ON at_inc.alerta_id = pa.id AND at_inc.tipo = 'INCLUSAO' AND INSTR(%s, at_inc.termo) > 0 
                 WHERE pa.ativo = 1 AND (pa.enviar_push = 1 OR pa.enviar_email = 1) 
                 AND u.is_pro = 1 AND u.status_assinatura IN ('active', 'trial', 'grace_period')
                 AND (NOT EXISTS (SELECT 1 FROM alertas_ufs WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_ufs au WHERE au.alerta_id = pa.id AND au.uf = %s))
@@ -310,107 +283,114 @@ def processar_notificacoes():
                 AND NOT EXISTS (SELECT 1 FROM alertas_termos at WHERE at.alerta_id = pa.id AND at.tipo = 'EXCLUSAO' AND INSTR(%s, at.termo) > 0)
             """
             
-            # Validação status
-            status_real = (lic['situacaoReal'] or "").lower()
-            if not any(t in status_real for t in ['A Receber/Recebendo Proposta']):
-                continue
-
             obj = (lic['objetoCompra'] or "").lower()
             uf = (lic['unidadeOrgaoUfSigla'] or "")
             mun = (lic['unidadeOrgaoMunicipioNome'] or "")
             mod = lic['modalidadeId']
 
-            cursor.execute(query_match, (obj, uf, mun, mod, obj, obj))
+            cursor.execute(query_match, (uf, mun, mod, obj, obj))
             matches = cursor.fetchall()
             
-            # Guarda tudo num objeto em memória para processar DEPOIS de fechar o banco
-            licitacoes_para_processar.append({
-                'licitacao': lic,
-                'destinatarios': matches
-            })
+            if matches:
+                licitacoes_para_processar.append({
+                    'licitacao': lic,
+                    'destinatarios': matches
+                })
 
-        # FECHA O BANCO AQUI! LIBERA A PORTA PARA A API TRABALHAR!
         cursor.close()
         conn.close()
-        logger.info("Banco liberado. Iniciando envio de mensagens...")
 
     except Exception as e:
         logger.error(f"Erro na Fase 1 (Banco): {e}")
         if conn and conn.is_connected(): conn.close()
         return
 
-    # --- FASE 2: PROCESSAMENTO PESADO (SEM BANCO) ---
-    # Aqui a API pode funcionar livremente enquanto o worker envia e-mails
-    mensagens_push = []
+    # --- FASE 2: ENVIO (API/FIREBASE) COM BAIXA IMEDIATA ---
     emails_enviados_ciclo = set()
 
     for item in licitacoes_para_processar:
         lic = item['licitacao']
         destinatarios = item['destinatarios']
+        mensagens_push_deste_item = []
         
+        # A) Prepara Envios
         for dest in destinatarios:
-            # 1. Prepara Push
+            # 1. Monta Push Notification
             if dest['token_push']:
                 try:
                     titulo = f"Nova Licitação em {lic['unidadeOrgaoMunicipioNome']}"
-                    corpo = f"{lic['objetoCompra'][:80]}..."
+                    corpo = f"{lic['objetoCompra'][:100]}..."
                     
-                    if dest['device_type'] == 'web_browser':
-                        msg = messaging.Message(
-                            token=dest['token_push'],
-                            notification=messaging.Notification(title=titulo, body=corpo),
-                            webpush=messaging.WebpushConfig(fcm_options=messaging.WebpushFCMOptions(link=f"https://finnd.com.br/detalhes/{lic['numeroControlePNCP']}"))
-                        )
-                    else:
-                        msg = messaging.Message(
-                            token=dest['token_push'],
-                            notification=messaging.Notification(title=titulo, body=corpo),
-                            data={"click_action": "FLUTTER_NOTIFICATION_CLICK", "pncp": str(lic['numeroControlePNCP'])}
-                        )
-                    mensagens_push.append(msg)
-                except: pass
+                    data_payload = {
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK", 
+                        "pncp": str(lic['numeroControlePNCP']),
+                        "licitacao_id": str(lic['numeroControlePNCP']),
+                        "alerta_id": str(dest['alerta_id']),
+                        "tipo": "oportunidade"
+                    }
 
-            # 2. Envia Email (Agora é seguro fazer requests aqui)
+                    # Configuração Otimizada (iOS + Android)
+                    msg = messaging.Message(
+                        token=dest['token_push'],
+                        notification=messaging.Notification(title=titulo, body=corpo),
+                        data=data_payload,
+                        # Garante prioridade no Android
+                        android=messaging.AndroidConfig(priority='high'),
+                        # Garante funcionamento no iOS (Background + Badge)
+                        apns=messaging.APNSConfig(
+                            payload=messaging.APNSPayload(
+                                aps=messaging.Aps(content_available=True, sound='default')
+                            )
+                        )
+                    )
+                    mensagens_push_deste_item.append(msg)
+                except Exception as e: 
+                    logger.error(f"Erro montagem push: {e}")
+
+            # 2. Envia Email
             if dest['enviar_email'] and dest['email_user']:
                 chave = f"{dest['email_user']}_{lic['id']}"
                 if chave not in emails_enviados_ciclo:
                     emails_enviados_ciclo.add(chave)
                     val_est = f"R$ {float(lic['valorTotalEstimado']):,.2f}" if lic['valorTotalEstimado'] else "R$ N/I"
-                    html = gerar_html_email(
-                        dest['nome_user'] or "Assinante", lic['objetoCompra'], lic.get('orgaoEntidadeRazaoSocial') or "Órgão",
-                        val_est, lic['unidadeOrgaoMunicipioNome'], lic['unidadeOrgaoUfSigla'],
-                        f"https://finnd.com.br/detalhes/{lic['numeroControlePNCP']}", dest['nome_alerta']
+                    
+                    html_body = gerar_html_email(
+                        dest['nome_user'] or "Assinante", 
+                        lic['objetoCompra'], 
+                        lic.get('orgaoEntidadeRazaoSocial') or "Órgão",
+                        val_est, 
+                        lic['unidadeOrgaoMunicipioNome'], 
+                        lic['unidadeOrgaoUfSigla'],
+                        f"https://finnd.com.br/detalhes/{lic['numeroControlePNCP']}",
+                        dest['nome_alerta']
                     )
-                    enviar_email_mailgun(dest['email_user'], dest['nome_user'], f"Oportunidade: {lic['objetoCompra'][:30]}...", html)
-            
-            """
-                Envio de emails está dentro do loop. Para começar (até uns 1.000 e-mails por dia), isso roda tranquilo. O requests.post leva cerca de 0.5s.
-                Se você escalar para 100.000 usuários, esse loop vai ficar lento. Nesse caso futuro, você não enviaria o e-mail aqui. 
-                Você apenas salvaria numa tabela fila_emails e teria outro script só para disparar e-mails. 
-                Mas para agora, faça direto no loop que funciona perfeitamente.
-            """
+                    enviar_email_mailgun(dest['email_user'], dest['nome_user'], f"Oportunidade: {lic['objetoCompra'][:30]}...", html_body)
 
-    # Envio Push em Lote
-    if mensagens_push:
-        for i in range(0, len(mensagens_push), 500):
+        # B) Dispara Push deste item (Batch pequeno)
+        if mensagens_push_deste_item:
             try:
-                messaging.send_each(mensagens_push[i:i+500])
-            except Exception as e: logger.error(f"Erro Firebase: {e}")
+                # Envia em lotes de 500 se houver muitos inscritos para a mesma licitação
+                for i in range(0, len(mensagens_push_deste_item), 500):
+                    batch = mensagens_push_deste_item[i:i+500]
+                    messaging.send_each(batch)
+            except Exception as e:
+                logger.error(f"Erro envio Firebase: {e}")
 
-    # --- FASE 3: ATUALIZAÇÃO FINAL (RÁPIDA) ---
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        ids = [l['id'] for l in licitacoes] # Usa a lista original da Fase 1
-        if ids:
-            format_strings = ','.join(['%s'] * len(ids))
-            cursor.execute(f"UPDATE licitacoes SET notificacao_processada = 1, processamento_inicio = NULL WHERE id IN ({format_strings})", tuple(ids))
-            conn.commit()
-            logger.info(f"Ciclo finalizado. {len(ids)} licitações marcadas como processadas.")
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Erro na Fase 3 (Update Final): {e}")
+        # C) BAIXA IMEDIATA NO BANCO (CRUCIAL PARA NÃO REPETIR)
+        # Abre conexão rápida só para marcar este item como concluído
+        try:
+            conn_up = get_db_connection()
+            c_up = conn_up.cursor()
+            c_up.execute("UPDATE licitacoes SET notificacao_processada = 1, processamento_inicio = NULL WHERE id = %s", (lic['id'],))
+            conn_up.commit()
+            c_up.close()
+            conn_up.close()
+            # logger.info(f"Item {lic['id']} processado e baixado.")
+        except Exception as e:
+            logger.critical(f"ERRO AO DAR BAIXA NA LICITACAO {lic['id']}: {e}")
+
+    # Não precisa mais da Fase 3 de Update Final em massa, pois fizemos um por um.
+    logger.info(f"Ciclo finalizado. {len(licitacoes)} licitações processadas.")
 
 if __name__ == "__main__":
     logger.info("Worker iniciado em loop contínuo.")
