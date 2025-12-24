@@ -42,6 +42,10 @@ from mysql.connector import pooling
 # =========================================================================
 # ========================= FIREBASE ======================================
 # Decorator para proteger rotas da API com Token do Firebase
+# - Valida o Firebase ID Token
+# - Extrai uid e email diretamente do token
+# - Injeta uid/email nas rotas protegidas
+# - O backend é a única fonte de verdade da identidade do usuário
 def login_firebase_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -427,7 +431,7 @@ def pagina_nao_encontrada(e):
 
     # 2. Rotas do Admin → renderizam o template de admin com a variável necessária
     if request.path.startswith('/admin'):
-        return render_template('admin/404.html', admin_base_template=admin_base_template), 404
+        return render_template('admin/404.html', admin_view=admin.index_view, admin_base_template=admin.base_template), 404
 
     # 3. Outras rotas (/, /.env, etc.) → retornam JSON para evitar spam de bots
     return jsonify({"erro": "Página não encontrada", "status_code": 404}), 404
@@ -1440,23 +1444,19 @@ def revenuecat_webhook():
     """
     Webhook RevenueCat com segurança, idempotência e consistência de estado.
     """
-
     # 1. AUTENTICAÇÃO
     auth_header = request.headers.get('Authorization', '')
     expected_token = os.getenv('REVENUECAT_WEBHOOK_AUTH', '')
 
     incoming_token = auth_header.split(' ')[1] if auth_header.startswith('Bearer ') else auth_header
-
     if not incoming_token or not hmac.compare_digest(incoming_token, expected_token):
         app.logger.warning("SECURITY: Webhook RevenueCat com token inválido")
         return jsonify({"erro": "Não autorizado"}), 401
 
     data = request.get_json(silent=True) or {}
     event = data.get('event')
-
     if not event:
         return jsonify({"status": "Ignorado (payload inválido)"}), 200
-
     # 2. EXTRAÇÃO DE DADOS
     rc_event_id = event.get('id')
     rc_event_type = event.get('type')
@@ -1476,7 +1476,6 @@ def revenuecat_webhook():
 
     dt_compra = ms_to_utc(purchased_at_ms)
     dt_expiracao = ms_to_utc(expiration_at_ms)
-
     # 3. BANCO + IDEMPOTÊNCIA
     conn = get_db_connection()
     if not conn:
@@ -1484,7 +1483,6 @@ def revenuecat_webhook():
 
     try:
         cursor = conn.cursor(dictionary=True)
-
         # Idempotência forte
         cursor.execute(
             "SELECT id FROM assinaturas_historico WHERE event_id = %s",
@@ -1493,29 +1491,23 @@ def revenuecat_webhook():
         if cursor.fetchone():
             app.logger.info(f"RC: Evento {rc_event_id} já processado")
             return jsonify({"status": "Já processado"}), 200
-
         # 4. GARANTE USUÁRIO
         cursor.execute("""
             INSERT IGNORE INTO usuarios_status (uid_externo, created_at)
             VALUES (%s, NOW())
         """, (app_user_id,))
-
         cursor.execute("""
             SELECT id FROM usuarios_status WHERE uid_externo = %s
         """, (app_user_id,))
         user = cursor.fetchone()
         user_id = user['id']
-
         # 5. LÓGICA DE ESTADO
         eventos_ativam = {'INITIAL_PURCHASE', 'RENEWAL', 'UNCANCELLATION', 'NON_RENEWING_PURCHASE', 'PRODUCT_CHANGE'}
-
         eventos_alerta = {'CANCELLATION', 'BILLING_ISSUE'}
-
         eventos_expiram = {'EXPIRATION'}
 
         novo_is_pro = None
         novo_status = None
-
         if rc_event_type in eventos_ativam:
             novo_is_pro = 1
             novo_status = 'active'
@@ -1528,7 +1520,6 @@ def revenuecat_webhook():
         elif rc_event_type in eventos_expiram:
             novo_is_pro = 0
             novo_status = 'expired'
-
         # 6. UPDATE CONSOLIDADO DO USUÁRIO
         if novo_status:
             cursor.execute("""
@@ -1539,7 +1530,6 @@ def revenuecat_webhook():
             """, (
                 novo_is_pro, novo_status, dt_expiracao, user_id
             ))
-
         # 7. HISTÓRICO (FONTE DA VERDADE)
         cursor.execute("""
             INSERT INTO assinaturas_historico
@@ -1551,13 +1541,11 @@ def revenuecat_webhook():
             user_id, app_user_id, rc_event_type, product_id, rc_event_id, entitlement_id, dt_compra, dt_expiracao,
             json.dumps(data)
         ))
-
         conn.commit()
 
         app.logger.info(
             f"RC OK | event={rc_event_type} | user={app_user_id} | event_id={rc_event_id}"
         )
-
         return jsonify({"status": "processado"}), 200
 
     except Exception as e:
@@ -1675,6 +1663,12 @@ def _inserir_criterios_filhos(cursor, alerta_id, data):
     inserir_lote('alertas_termos', 'termo', data.get('termos_inclusao'), 'tipo', 'INCLUSAO')
     inserir_lote('alertas_termos', 'termo', data.get('termos_exclusao'), 'tipo', 'EXCLUSAO')
 
+# IMPORTANTE:
+# - O UID do usuário NUNCA deve ser enviado pelo cliente.
+# - A identidade do usuário é derivada EXCLUSIVAMENTE do Firebase ID Token
+#   presente no header Authorization: Bearer <token>.
+# - Qualquer UID enviado no body será ignorado.
+# - Isso previne spoofing e garante que o backend seja a fonte da verdade.
 class RegistroDispositivoSchema(BaseModel):
     email: Optional[str] = None
     nome: Optional[str] = None
@@ -1689,6 +1683,13 @@ class RegistroDispositivoSchema(BaseModel):
 @with_db_cursor # Isso injeta o cursor do DB na função.
 def api_sincronizar_usuario(uid, email, cursor):
     data = request.json
+    # Segurança defensiva: UID nunca deve vir do cliente
+    if 'uid' in data:
+        app.logger.warning(
+            f"SECURITY: Tentativa de envio de UID no body por {email}"
+        )
+        return jsonify({'erro': 'Campo uid não é permitido'}), 400
+
     app.logger.info(f"SYNC USUARIO: Recebido payload de {email}") # LOG PARA DEBUG
 
     try:

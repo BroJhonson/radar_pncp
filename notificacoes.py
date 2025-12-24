@@ -236,16 +236,15 @@ def processar_notificacoes():
         cursor = conn.cursor(dictionary=True)
 
         # 1. Resgate Zumbis
-        cursor.execute("""
-            UPDATE licitacoes SET notificacao_processada = 0, processamento_inicio = NULL 
-            WHERE notificacao_processada = 2 AND processamento_inicio < DATE_SUB(NOW(), INTERVAL 15 MINUTE)
-        """)
-        conn.commit()
+        resgatar_zumbis(cursor, conn)
 
         # 2. Marca Lote para processamento (Status 2)
+        # Limite de 50 é bom para e-mail. Se fosse só push, poderia ser 200.
         cursor.execute("""
-            UPDATE licitacoes SET notificacao_processada = 2, processamento_inicio = NOW() 
-            WHERE notificacao_processada = 0 LIMIT 50
+            UPDATE licitacoes 
+            SET notificacao_processada = 2, processamento_inicio = NOW() 
+            WHERE notificacao_processada = 0 
+            LIMIT 50
         """)
         conn.commit()
 
@@ -253,7 +252,8 @@ def processar_notificacoes():
         cursor.execute("""
             SELECT id, numeroControlePNCP, objetoCompra, valorTotalEstimado, situacaoReal,
                    unidadeOrgaoUfSigla, unidadeOrgaoMunicipioNome, modalidadeId, orgaoEntidadeRazaoSocial
-            FROM licitacoes WHERE notificacao_processada = 2
+            FROM licitacoes 
+            WHERE notificacao_processada = 2
         """)
         licitacoes = cursor.fetchall()
 
@@ -265,24 +265,25 @@ def processar_notificacoes():
         logger.info(f"Processando lote de {len(licitacoes)} licitações...")
 
         # 4. Busca Reversa (Matches)
+        # Nota: Movido query string para fora do loop é melhor, mas aqui funciona.
+        query_match = """
+            SELECT DISTINCT d.token_push, d.tipo as device_type, pa.enviar_email, 
+                   u.email as email_user, u.nome as nome_user, 
+                   pa.nome_alerta, 
+                   pa.id as alerta_id
+            FROM preferencias_alertas pa
+            JOIN usuarios_status u ON pa.usuario_id = u.id
+            JOIN usuarios_dispositivos d ON pa.usuario_id = d.usuario_id
+            WHERE pa.ativo = 1 AND (pa.enviar_push = 1 OR pa.enviar_email = 1) 
+            AND u.is_pro = 1 AND u.status_assinatura IN ('active', 'trial', 'grace_period')
+            AND (NOT EXISTS (SELECT 1 FROM alertas_ufs WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_ufs au WHERE au.alerta_id = pa.id AND au.uf = %s))
+            AND (NOT EXISTS (SELECT 1 FROM alertas_municipios WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_municipios am WHERE am.alerta_id = pa.id AND am.municipio_nome = %s))
+            AND (NOT EXISTS (SELECT 1 FROM alertas_modalidades WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_modalidades am WHERE am.alerta_id = pa.id AND am.modalidade_id = %s))
+            AND EXISTS (SELECT 1 FROM alertas_termos at WHERE at.alerta_id = pa.id AND at.tipo = 'INCLUSAO' AND INSTR(%s, at.termo) > 0)
+            AND NOT EXISTS (SELECT 1 FROM alertas_termos at WHERE at.alerta_id = pa.id AND at.tipo = 'EXCLUSAO' AND INSTR(%s, at.termo) > 0)
+        """
+
         for lic in licitacoes:
-            query_match = """
-                SELECT DISTINCT d.token_push, d.tipo as device_type, pa.enviar_email, 
-                       u.email as email_user, u.nome as nome_user, 
-                       pa.nome_alerta, 
-                       pa.id as alerta_id
-                FROM preferencias_alertas pa
-                JOIN usuarios_status u ON pa.usuario_id = u.id
-                JOIN usuarios_dispositivos d ON pa.usuario_id = d.usuario_id
-                WHERE pa.ativo = 1 AND (pa.enviar_push = 1 OR pa.enviar_email = 1) 
-                AND u.is_pro = 1 AND u.status_assinatura IN ('active', 'trial', 'grace_period')
-                AND (NOT EXISTS (SELECT 1 FROM alertas_ufs WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_ufs au WHERE au.alerta_id = pa.id AND au.uf = %s))
-                AND (NOT EXISTS (SELECT 1 FROM alertas_municipios WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_municipios am WHERE am.alerta_id = pa.id AND am.municipio_nome = %s))
-                AND (NOT EXISTS (SELECT 1 FROM alertas_modalidades WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_modalidades am WHERE am.alerta_id = pa.id AND am.modalidade_id = %s))
-                AND EXISTS (SELECT 1 FROM alertas_termos at WHERE at.alerta_id = pa.id AND at.tipo = 'INCLUSAO' AND INSTR(%s, at.termo) > 0)
-                AND NOT EXISTS (SELECT 1 FROM alertas_termos at WHERE at.alerta_id = pa.id AND at.tipo = 'EXCLUSAO' AND INSTR(%s, at.termo) > 0)
-            """
-            
             obj = (lic['objetoCompra'] or "").lower()
             uf = (lic['unidadeOrgaoUfSigla'] or "")
             mun = (lic['unidadeOrgaoMunicipioNome'] or "")
@@ -296,6 +297,13 @@ def processar_notificacoes():
                     'licitacao': lic,
                     'destinatarios': matches
                 })
+            else:
+                # Se não deu match com ninguém, ainda assim precisamos marcar como lida depois
+                # Adicionamos na lista com destinatarios vazio, apenas para dar baixa
+                licitacoes_para_processar.append({
+                    'licitacao': lic,
+                    'destinatarios': []
+                })
 
         cursor.close()
         conn.close()
@@ -307,90 +315,99 @@ def processar_notificacoes():
 
     # --- FASE 2: ENVIO (API/FIREBASE) COM BAIXA IMEDIATA ---
     emails_enviados_ciclo = set()
+    
+    # [OTIMIZAÇÃO] Abre a conexão de update UMA VEZ antes do loop
+    conn_up = None
+    try:
+        conn_up = get_db_connection()
+        c_up = conn_up.cursor()
 
-    for item in licitacoes_para_processar:
-        lic = item['licitacao']
-        destinatarios = item['destinatarios']
-        mensagens_push_deste_item = []
-        
-        # A) Prepara Envios
-        for dest in destinatarios:
-            # 1. Monta Push Notification
-            if dest['token_push']:
-                try:
-                    titulo = f"Nova Licitação em {lic['unidadeOrgaoMunicipioNome']}"
-                    corpo = f"{lic['objetoCompra'][:100]}..."
-                    
-                    data_payload = {
-                        "click_action": "FLUTTER_NOTIFICATION_CLICK", 
-                        "pncp": str(lic['numeroControlePNCP']),
-                        "licitacao_id": str(lic['numeroControlePNCP']),
-                        "alerta_id": str(dest['alerta_id']),
-                        "tipo": "oportunidade"
-                    }
+        for item in licitacoes_para_processar:
+            lic = item['licitacao']
+            destinatarios = item['destinatarios']
+            mensagens_push_deste_item = []
+            
+            # Se tiver destinatários, prepara o envio
+            if destinatarios:
+                for dest in destinatarios:
+                    # 1. Monta Push Notification
+                    if dest['token_push']:
+                        try:
+                            # Título curto e direto para mobile
+                            titulo = f"Nova em {lic['unidadeOrgaoMunicipioNome']}/{lic['unidadeOrgaoUfSigla']}"
+                            # Corpo truncado
+                            corpo = f"{lic['objetoCompra'][:120]}..."
+                            
+                            data_payload = {
+                                "click_action": "FLUTTER_NOTIFICATION_CLICK", 
+                                "tipo": "oportunidade",
+                                # [CORREÇÃO] Enviar ID numérico E Código PNCP
+                                "licitacao_id": str(lic['id']),       # ID do banco (Inteiro)
+                                "pncp": str(lic['numeroControlePNCP']), # Código PNCP
+                                "alerta_id": str(dest['alerta_id'])
+                            }
 
-                    # Configuração Otimizada (iOS + Android)
-                    msg = messaging.Message(
-                        token=dest['token_push'],
-                        notification=messaging.Notification(title=titulo, body=corpo),
-                        data=data_payload,
-                        # Garante prioridade no Android
-                        android=messaging.AndroidConfig(priority='high'),
-                        # Garante funcionamento no iOS (Background + Badge)
-                        apns=messaging.APNSConfig(
-                            payload=messaging.APNSPayload(
-                                aps=messaging.Aps(content_available=True, sound='default')
+                            # Configuração Otimizada (iOS + Android)
+                            msg = messaging.Message(
+                                token=dest['token_push'],
+                                notification=messaging.Notification(title=titulo, body=corpo),
+                                data=data_payload,
+                                android=messaging.AndroidConfig(priority='high'),
+                                apns=messaging.APNSConfig(
+                                    payload=messaging.APNSPayload(
+                                        aps=messaging.Aps(content_available=True, sound='default')
+                                    )
+                                )
                             )
-                        )
-                    )
-                    mensagens_push_deste_item.append(msg)
-                except Exception as e: 
-                    logger.error(f"Erro montagem push: {e}")
+                            mensagens_push_deste_item.append(msg)
+                        except Exception as e: 
+                            logger.error(f"Erro montagem push: {e}")
 
-            # 2. Envia Email
-            if dest['enviar_email'] and dest['email_user']:
-                chave = f"{dest['email_user']}_{lic['id']}"
-                if chave not in emails_enviados_ciclo:
-                    emails_enviados_ciclo.add(chave)
-                    val_est = f"R$ {float(lic['valorTotalEstimado']):,.2f}" if lic['valorTotalEstimado'] else "R$ N/I"
-                    
-                    html_body = gerar_html_email(
-                        dest['nome_user'] or "Assinante", 
-                        lic['objetoCompra'], 
-                        lic.get('orgaoEntidadeRazaoSocial') or "Órgão",
-                        val_est, 
-                        lic['unidadeOrgaoMunicipioNome'], 
-                        lic['unidadeOrgaoUfSigla'],
-                        f"https://finnd.com.br/detalhes/{lic['numeroControlePNCP']}",
-                        dest['nome_alerta']
-                    )
-                    enviar_email_mailgun(dest['email_user'], dest['nome_user'], f"Oportunidade: {lic['objetoCompra'][:30]}...", html_body)
+                    # 2. Envia Email
+                    if dest['enviar_email'] and dest['email_user']:
+                        chave = f"{dest['email_user']}_{lic['id']}"
+                        if chave not in emails_enviados_ciclo:
+                            emails_enviados_ciclo.add(chave)
+                            val_est = f"R$ {float(lic['valorTotalEstimado']):,.2f}" if lic['valorTotalEstimado'] else "R$ N/I"
+                            
+                            html_body = gerar_html_email(
+                                dest['nome_user'] or "Assinante", 
+                                lic['objetoCompra'], 
+                                lic.get('orgaoEntidadeRazaoSocial') or "Órgão",
+                                val_est, 
+                                lic['unidadeOrgaoMunicipioNome'], 
+                                lic['unidadeOrgaoUfSigla'],
+                                # Ajuste o link para abrir seu App ou Site corretamente
+                                f"https://finnd.com.br/detalhes/{lic['numeroControlePNCP']}",   # CORRIGIR ISSOOOO
+                                dest['nome_alerta']
+                            )
+                            enviar_email_mailgun(dest['email_user'], dest['nome_user'], f"Oportunidade: {lic['objetoCompra'][:30]}...", html_body)
 
-        # B) Dispara Push deste item (Batch pequeno)
-        if mensagens_push_deste_item:
+                # B) Dispara Push deste item (Batch)
+                if mensagens_push_deste_item:
+                    try:
+                        for i in range(0, len(mensagens_push_deste_item), 500):
+                            batch = mensagens_push_deste_item[i:i+500]
+                            messaging.send_each(batch)
+                    except Exception as e:
+                        logger.error(f"Erro envio Firebase Batch: {e}")
+
+            # C) BAIXA IMEDIATA (Reutilizando a conexão aberta)
             try:
-                # Envia em lotes de 500 se houver muitos inscritos para a mesma licitação
-                for i in range(0, len(mensagens_push_deste_item), 500):
-                    batch = mensagens_push_deste_item[i:i+500]
-                    messaging.send_each(batch)
+                c_up.execute("UPDATE licitacoes SET notificacao_processada = 1, processamento_inicio = NULL WHERE id = %s", (lic['id'],))
+                conn_up.commit()
             except Exception as e:
-                logger.error(f"Erro envio Firebase: {e}")
+                logger.critical(f"ERRO AO DAR BAIXA NA LICITACAO {lic['id']}: {e}")
 
-        # C) BAIXA IMEDIATA NO BANCO (CRUCIAL PARA NÃO REPETIR)
-        # Abre conexão rápida só para marcar este item como concluído
-        try:
-            conn_up = get_db_connection()
-            c_up = conn_up.cursor()
-            c_up.execute("UPDATE licitacoes SET notificacao_processada = 1, processamento_inicio = NULL WHERE id = %s", (lic['id'],))
-            conn_up.commit()
+        logger.info(f"Ciclo finalizado. {len(licitacoes)} processadas.")
+
+    except Exception as e:
+        logger.error(f"Erro crítico na Fase 2: {e}")
+    finally:
+        # Fecha a conexão de update de forma segura
+        if conn_up and conn_up.is_connected():
             c_up.close()
             conn_up.close()
-            # logger.info(f"Item {lic['id']} processado e baixado.")
-        except Exception as e:
-            logger.critical(f"ERRO AO DAR BAIXA NA LICITACAO {lic['id']}: {e}")
-
-    # Não precisa mais da Fase 3 de Update Final em massa, pois fizemos um por um.
-    logger.info(f"Ciclo finalizado. {len(licitacoes)} licitações processadas.")
 
 if __name__ == "__main__":
     logger.info("Worker iniciado em loop contínuo.")
