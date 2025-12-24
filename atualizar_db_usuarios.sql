@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS `usuarios_dispositivos` (
     `usuario_id` INT NOT NULL,
     `tipo` ENUM('mobile_android', 'mobile_ios', 'web_browser') NOT NULL,
     `token_push` VARCHAR(512) NOT NULL,
-    `device_info` JSON, -- Mudamos para JSON para flexibilidade futura
+    `device_info` TEXT,
     `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (`usuario_id`) REFERENCES `usuarios_status`(`id`) ON DELETE CASCADE,
     UNIQUE KEY `uk_user_token` (`usuario_id`, `token_push`)
