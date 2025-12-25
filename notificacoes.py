@@ -193,7 +193,10 @@ def enviar_email_mailgun(destinatario_email, destinatario_nome, assunto, html_bo
             timeout=5
         )
         if response.status_code != 200:
-            logger.error(f"Erro Mailgun: {response.status_code} - {response.text}")
+            # Mudei para CRITICAL para garantir que vc veja no arquivo de log
+            logger.critical(f"FALHA MAILGUN EMAIL para {destinatario_email}: Status {response.status_code} - Resposta: {response.text}")
+        else:
+            logger.info(f"EMAIL ENVIADO com sucesso para {destinatario_email}")
             
     except Exception as e:
         logger.error(f"Exceção ao enviar email: {e}")
@@ -352,7 +355,14 @@ def processar_notificacoes():
                                 token=dest['token_push'],
                                 notification=messaging.Notification(title=titulo, body=corpo),
                                 data=data_payload,
-                                android=messaging.AndroidConfig(priority='high'),
+                                android=messaging.AndroidConfig(
+                                    priority='high',
+                                    # CORREÇÃO: Especificar o canal para garantir som/vibração
+                                    notification=messaging.AndroidNotification(
+                                        channel_id='high_importance_channel',
+                                        click_action='FLUTTER_NOTIFICATION_CLICK'
+                                    )
+                                ),
                                 apns=messaging.APNSConfig(
                                     payload=messaging.APNSPayload(
                                         aps=messaging.Aps(content_available=True, sound='default')
