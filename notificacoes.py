@@ -276,8 +276,13 @@ def processar_notificacoes():
                    pa.id as alerta_id
             FROM preferencias_alertas pa
             JOIN usuarios_status u ON pa.usuario_id = u.id
-            JOIN usuarios_dispositivos d ON pa.usuario_id = d.usuario_id
-            WHERE pa.ativo = 1 AND (pa.enviar_push = 1 OR pa.enviar_email = 1) 
+            LEFT JOIN usuarios_dispositivos d ON pa.usuario_id = d.usuario_id
+            WHERE pa.ativo = 1 
+             AND (
+                (pa.enviar_push = 1 AND d.token_push IS NOT NULL) 
+                OR 
+                (pa.enviar_email = 1 AND u.email IS NOT NULL AND u.email != '')
+            )
             AND u.is_pro = 1 AND u.status_assinatura IN ('active', 'trial', 'grace_period')
             AND (NOT EXISTS (SELECT 1 FROM alertas_ufs WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_ufs au WHERE au.alerta_id = pa.id AND au.uf = %s))
             AND (NOT EXISTS (SELECT 1 FROM alertas_municipios WHERE alerta_id = pa.id) OR EXISTS (SELECT 1 FROM alertas_municipios am WHERE am.alerta_id = pa.id AND am.municipio_nome = %s))
