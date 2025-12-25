@@ -1770,7 +1770,7 @@ def listar_alertas(uid, email, cursor):
         # juntá-los com vírgula e entregar pronto para o App Mobile.
         query = """
             SELECT 
-                pa.id, pa.nome_alerta, pa.enviar_push, pa.created_at, pa.ativo,
+                pa.id, pa.nome_alerta, pa.enviar_push, pa.enviar_email, pa.created_at, pa.ativo,
                 (SELECT GROUP_CONCAT(uf SEPARATOR ',') FROM alertas_ufs WHERE alerta_id = pa.id) as uf,
                 (SELECT GROUP_CONCAT(municipio_nome SEPARATOR ',') FROM alertas_municipios WHERE alerta_id = pa.id) as municipio,
                 (SELECT GROUP_CONCAT(modalidade_id SEPARATOR ',') FROM alertas_modalidades WHERE alerta_id = pa.id) as modalidades,
@@ -1787,6 +1787,9 @@ def listar_alertas(uid, email, cursor):
         for a in alertas:
             # Formata datas/decimais primeiro
             a = formatar_para_json(a)
+
+            # Garante que enviar_email seja booleano (0/1 -> False/True)
+            a['enviar_email'] = bool(a['enviar_email']) if 'enviar_email' in a else False
             
             # --- CONVERSÃO MANUAL DE STRING CSV PARA LISTA ---
             # Se for None, vira []. Se for string, dá split.
@@ -1901,15 +1904,13 @@ def editar_alerta(uid, email, cursor, alerta_id):
         # 2. ATUALIZA A TABELA PAI (Nome, Status, Push)
         nome_alerta = data.get('nome_alerta')
         enviar_push = data.get('enviar_push')
-        # Se ativo não vier no JSON, mantemos o que está no banco ou definimos True? 
-        # Geralmente edição não muda o status 'ativo' a menos que explicitado.
-        # Vamos assumir que atualiza tudo que vier.
+        enviar_email = data.get('enviar_email') 
         
         cursor.execute("""
             UPDATE preferencias_alertas 
-            SET nome_alerta = %s, enviar_push = %s, ativo = 1
+            SET nome_alerta = %s, enviar_push = %s, enviar_email = %s, ativo = 1
             WHERE id = %s
-        """, (nome_alerta, enviar_push, alerta_id))
+        """, (nome_alerta, enviar_push, enviar_email, alerta_id))
 
         # 3. ESTRATÉGIA "LIMPA" (Deleta todos os filhos antigos)
         # Como configuramos ON DELETE CASCADE no banco, deletar o pai apagaria tudo.
