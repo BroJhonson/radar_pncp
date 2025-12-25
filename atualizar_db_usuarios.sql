@@ -2,6 +2,9 @@
 -- 1. Tabelas de Usuários e Auth (Estrutura Base)
 -- =======================================================
 
+-- Entender depois o porque disso "updated_at"
+
+
 CREATE TABLE IF NOT EXISTS `usuarios_status` (
     `id` INT AUTO_INCREMENT PRIMARY KEY,
     `uid_externo` VARCHAR(128) UNIQUE NOT NULL, -- Firebase UID
@@ -112,6 +115,7 @@ CREATE TABLE IF NOT EXISTS `usuarios_filtros_salvos` (
     `nome_filtro` VARCHAR(100) NOT NULL,
     `configuracao_json` JSON NOT NULL,
     `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+    `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,    -- Adicionado agora essa tabela. Sei nem ql utilidade
     UNIQUE KEY `unique_user_filter` (`usuario_id`, `id_mobile`),
     FOREIGN KEY (`usuario_id`) REFERENCES `usuarios_status`(`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
