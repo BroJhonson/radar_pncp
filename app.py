@@ -75,16 +75,6 @@ def login_firebase_required(f):
 
             # --- Cache MISS: Valida com o Google ---
             decoded_token = firebase_auth.verify_id_token(token)
-
-            # === NOVA TRAVA DE SEGURANÇA ===
-            if not decoded_token.get('email_verified', False):
-                # Retorna 403 (Proibido) se o e-mail não foi confirmado
-                return jsonify({
-                    'erro': 'E-mail não verificado.',
-                    'code': 'auth/email-not-verified' 
-                }), 403
-            # ===============================
-            
             uid = decoded_token['uid']
             email = decoded_token.get('email', '')
             
@@ -1716,21 +1706,6 @@ def api_sincronizar_usuario(uid, email, cursor):
         user_row = cursor.fetchone()
         user_id = user_row['id']
         is_pro = bool(user_row['is_pro'])
-
-        # --- LIMPEZA DE DISPOSITIVOS ANTIGOS (NOVO) ---
-        # Verifica quantos dispositivos esse usuário tem
-        cursor.execute("SELECT id FROM usuarios_dispositivos WHERE usuario_id = %s ORDER BY updated_at ASC", (user_id,))
-        devices = cursor.fetchall()
-        
-        if len(devices) >= 5:
-            # Se tiver 5 ou mais, deleta o mais antigo (o primeiro da lista ordenada por ASC)
-            # Mas cuidado para não deletar o que estamos tentando inserir agora se for update
-            # Estratégia simples: Deleta o mais antigo que NÃO seja o token atual (se possível)
-            ids_para_remover = [d['id'] for d in devices[:len(devices)-4]] # Mantém os 4 mais recentes + o novo
-            if ids_para_remover:
-                format_strings = ','.join(['%s'] * len(ids_para_remover))
-                cursor.execute(f"DELETE FROM usuarios_dispositivos WHERE id IN ({format_strings})", tuple(ids_para_remover))
-                # Não commita ainda, espera o final
         
         # TRATAMENTO DO DEVICE INFO (JSON)
         device_info_str = None
@@ -2010,8 +1985,8 @@ def sincronizar_favoritos(uid, email, cursor):
     user_id = user_row['id']
     app.logger.info(f"FAVORITOS: Sincronizando favoritos para usuario {user_id} (PRO={user_row['is_pro']})")
     
-    # 2. Verifica Limite - 500 É um número que parece infinito para uso manual, mas protege o banco de ter milhões de linhas.
-    LIMITE_FAVORITOS = 500
+    # 2. Verifica Limite (Ex: 100)
+    LIMITE_FAVORITOS = 100
     cursor.execute("SELECT COUNT(*) as total FROM usuarios_licitacoes_favoritas WHERE usuario_id = %s", (user_id,))
     total_atual = cursor.fetchone()['total']
     
@@ -2070,44 +2045,24 @@ def sincronizar_filtros_favoritos(uid, email, cursor):
     if not user_row: return jsonify({"erro": "Usuario nao encontrado"}), 404
     user_id = user_row['id']
     
-    # --- TRAVA DE SEGURANÇA (NOVO) ---
-    LIMITE_FILTROS = 30 
-    cursor.execute("SELECT COUNT(*) as total FROM usuarios_filtros_salvos WHERE usuario_id = %s", (user_id,))
-    total_atual = cursor.fetchone()['total']
-
-    # Se já tem muitos, ignoramos novos inserts (mas permitimos updates de existentes se a lógica fosse mais complexa,
-    # aqui simplificamos para bloquear se a lista enviada for inflar demais)
-    espaco_livre = LIMITE_FILTROS - total_atual
-    
-    if espaco_livre <= 0:
-        # Opcional: Logar tentativa de abuso
-        app.logger.warning(f"LIMITES: Usuario {user_id} atingiu limite de filtros salvos.")
-        # Não retornamos erro 400 para não quebrar o sync silencioso do app, 
-        # mas retornamos apenas o que já existe no banco.
-        pass 
-    else:
-        # Só processa até preencher o limite
-        filtros_para_processar = filtros_locais[:espaco_livre] if espaco_livre < len(filtros_locais) else filtros_locais
-
-        for f in filtros_para_processar:
-            # 2. Insere ou Atualiza os filtros que vieram do App
-            # (Upsert baseado no ID gerado)
+    # 2. Insere ou Atualiza os filtros que vieram do App
+    # (Upsert baseado no ID gerado no mobile)
+    for f in filtros_locais:
+        id_mobile = f.get('id') # ID gerado ficou por definição id_mobile (UUID), mas é o id para qualquer sistema (web,etc)
+        nome = f.get('nome')
+        # O 'filtros' dentro do objeto é a configuração complexa (FiltrosAplicados)
+        # Precisamos converter para string JSON para salvar no banco de texto
+        config_json = json.dumps(f.get('filtros', {}))
+        app.logger.info(f"FILTROS: Sincronizando filtro favorito '{nome}' (ID Mobile: {id_mobile}) para usuario {user_id}")
         
-            id_mobile = f.get('id') # ID gerado ficou por definição id_mobile (UUID), mas é o id para qualquer sistema (web,etc)
-            nome = f.get('nome')
-            # O 'filtros' dentro do objeto é a configuração complexa (FiltrosAplicados)
-            # Precisamos converter para string JSON para salvar no banco de texto
-            config_json = json.dumps(f.get('filtros', {}))
-            app.logger.info(f"FILTROS: Sincronizando filtro favorito '{nome}' (ID Mobile: {id_mobile}) para usuario {user_id}")
-            
-            cursor.execute("""
-                INSERT INTO usuarios_filtros_salvos (usuario_id, id_mobile, nome_filtro, configuracao_json, created_at)
-                VALUES (%s, %s, %s, %s, NOW())
-                ON DUPLICATE KEY UPDATE 
-                    nome_filtro = VALUES(nome_filtro),
-                    configuracao_json = VALUES(configuracao_json),
-                    updated_at = NOW()
-            """, (user_id, id_mobile, nome, config_json))
+        cursor.execute("""
+            INSERT INTO usuarios_filtros_salvos (usuario_id, id_mobile, nome_filtro, configuracao_json, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON DUPLICATE KEY UPDATE 
+                nome_filtro = VALUES(nome_filtro),
+                configuracao_json = VALUES(configuracao_json),
+                updated_at = NOW()
+        """, (user_id, id_mobile, nome, config_json))
     
     cursor._connection.commit()
     app.logger.info("SYNC FILTROS: Commit realizado com sucesso (filtros salvos).")
